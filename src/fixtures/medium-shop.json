@@ -1,0 +1,129 @@
+{
+  "name": "Medium Shop",
+  "threshold": -111,
+  "config": {
+    "operatingHours": {
+      "Mon": [8, 20],
+      "Tue": [8, 20],
+      "Wed": [8, 20],
+      "Thu": [8, 20],
+      "Fri": [8, 20],
+      "Sat": [9, 18],
+      "Sun": [10, 16]
+    },
+    "minCoverage": {
+      "Mon": [[8, 11, 1], [11, 14, 3], [14, 17, 2], [17, 20, 2]],
+      "Tue": [[8, 11, 1], [11, 14, 3], [14, 17, 2], [17, 20, 2]],
+      "Wed": [[8, 11, 1], [11, 14, 3], [14, 17, 2], [17, 20, 2]],
+      "Thu": [[8, 11, 1], [11, 14, 3], [14, 17, 2], [17, 20, 2]],
+      "Fri": [[8, 11, 2], [11, 14, 3], [14, 17, 3], [17, 20, 2]],
+      "Sat": [[9, 12, 2], [12, 15, 3], [15, 18, 2]],
+      "Sun": [[10, 13, 2], [13, 16, 2]]
+    },
+    "minShiftLength": 4,
+    "maxShiftLength": 8,
+    "maxDailyHours": 9,
+    "allowSplitShifts": true,
+    "minGapBetweenBlocks": 2,
+    "maxBlocksPerDay": 2,
+    "maxConsecutiveDays": 5
+  },
+  "employees": [
+    {
+      "id": "ana",
+      "name": "Ana",
+      "maxWeeklyHours": 40,
+      "targetWeeklyHours": 24,
+      "preferred": {
+        "Mon": [[8, 17]], "Tue": [[8, 17]], "Wed": [[8, 17]], "Thu": [[8, 17]], "Fri": [[8, 17]]
+      },
+      "notPreferred": {
+        "Mon": [[17, 20]], "Tue": [[17, 20]], "Sat": [[9, 18]]
+      }
+    },
+    {
+      "id": "ben",
+      "name": "Ben",
+      "maxWeeklyHours": 40,
+      "targetWeeklyHours": 24,
+      "preferred": {
+        "Tue": [[11, 20]], "Wed": [[11, 20]], "Thu": [[11, 20]], "Fri": [[11, 20]], "Sat": [[9, 18]]
+      },
+      "notPreferred": {
+        "Mon": [[11, 20]], "Sun": [[10, 16]]
+      }
+    },
+    {
+      "id": "cleo",
+      "name": "Cleo",
+      "maxWeeklyHours": 30,
+      "targetWeeklyHours": 20,
+      "preferred": {
+        "Mon": [[8, 15]], "Wed": [[8, 15]], "Fri": [[8, 15]], "Sat": [[9, 18]]
+      },
+      "notPreferred": {
+        "Tue": [[8, 15]], "Thu": [[8, 15]]
+      }
+    },
+    {
+      "id": "dev",
+      "name": "Dev",
+      "maxWeeklyHours": 25,
+      "targetWeeklyHours": 16,
+      "preferred": {
+        "Thu": [[12, 20]], "Fri": [[12, 20]], "Sat": [[9, 18]], "Sun": [[10, 16]]
+      },
+      "notPreferred": {
+        "Wed": [[12, 20]]
+      }
+    },
+    {
+      "id": "eli",
+      "name": "Eli",
+      "maxWeeklyHours": 20,
+      "targetWeeklyHours": 12,
+      "preferred": {
+        "Sat": [[9, 18]], "Sun": [[10, 16]]
+      },
+      "notPreferred": {
+        "Fri": [[14, 20]]
+      }
+    },
+    {
+      "id": "fay",
+      "name": "Fay",
+      "maxWeeklyHours": 32,
+      "targetWeeklyHours": 20,
+      "preferred": {
+        "Mon": [[10, 19]], "Tue": [[10, 19]], "Wed": [[10, 19]], "Thu": [[10, 19]]
+      },
+      "notPreferred": {
+        "Sun": [[10, 16]]
+      }
+    },
+    {
+      "id": "gus",
+      "name": "Gus",
+      "maxWeeklyHours": 24,
+      "targetWeeklyHours": 16,
+      "preferred": {
+        "Mon": [[8, 14]], "Tue": [[8, 14]], "Wed": [[8, 14]], "Sun": [[10, 16]]
+      },
+      "notPreferred": {
+        "Sat": [[9, 15]]
+      }
+    },
+    {
+      "id": "hana",
+      "name": "Hana",
+      "maxWeeklyHours": 36,
+      "targetWeeklyHours": 24,
+      "preferred": {
+        "Wed": [[11, 20]], "Thu": [[11, 20]], "Fri": [[11, 20]], "Sat": [[10, 18]]
+      },
+      "notPreferred": {
+        "Tue": [[14, 20]], "Sun": [[10, 16]]
+      }
+    }
+  ]
+}

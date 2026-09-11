@@ -1,0 +1,53 @@
+{
+  "name": "Small Cafe",
+  "threshold": 70,
+  "config": {
+    "operatingHours": {
+      "Mon": [9, 15],
+      "Tue": [9, 15]
+    },
+    "minCoverage": 1,
+    "minShiftLength": 3,
+    "maxShiftLength": 4,
+    "maxDailyHours": 4,
+    "allowSplitShifts": false,
+    "maxBlocksPerDay": 1,
+    "maxConsecutiveDays": 5
+  },
+  "employees": [
+    {
+      "id": "ana",
+      "name": "Ana",
+      "maxWeeklyHours": 12,
+      "targetWeeklyHours": 8,
+      "preferred": {
+        "Mon": [[9, 15]],
+        "Tue": [[9, 13]]
+      }
+    },
+    {
+      "id": "ben",
+      "name": "Ben",
+      "maxWeeklyHours": 12,
+      "targetWeeklyHours": 8,
+      "preferred": {
+        "Mon": [[11, 15]]
+      },
+      "notPreferred": {
+        "Tue": [[9, 15]]
+      }
+    },
+    {
+      "id": "cleo",
+      "name": "Cleo",
+      "maxWeeklyHours": 12,
+      "targetWeeklyHours": 6,
+      "preferred": {
+        "Tue": [[10, 15]]
+      },
+      "notPreferred": {
+        "Mon": [[9, 13]]
+      }
+    }
+  ]
+}
