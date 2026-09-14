@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   addDays,
+  formatSpan,
   formatWeekRange,
   mondayOf,
   parseIsoDate,
   resolveWeek,
+  spanIsValid,
+  spanTiming,
   todayIso,
   weekDayIndex,
 } from '../src/core/calendar'
@@ -66,7 +69,7 @@ describe('resolveWeek', () => {
   it('paints time off unavailable and pins pinned, only within each entry', () => {
     const [resolved] = resolveWeek([employee()], '2026-09-21', {
       ana: {
-        timeOff: [{ date: '2026-09-22', startHour: 9, endHour: 12 }],
+        timeOff: [{ startDate: '2026-09-22', startHour: 9, endDate: '2026-09-22', endHour: 12 }],
         pins: [{ date: '2026-09-24', startHour: 14, endHour: 16 }],
       },
     })
@@ -82,7 +85,7 @@ describe('resolveWeek', () => {
     const input = employee()
     const [resolved] = resolveWeek([input], '2026-09-21', {
       ana: {
-        timeOff: [{ date: '2026-09-28', startHour: 0, endHour: 24 }],
+        timeOff: [{ startDate: '2026-09-28', startHour: 0, endDate: '2026-10-02', endHour: 24 }],
         pins: [{ date: '2026-09-20', startHour: 9, endHour: 12 }],
       },
     })
@@ -94,7 +97,10 @@ describe('resolveWeek', () => {
     const input = employee()
     const before = Array.from(input.availability)
     const exceptions = {
-      ana: { timeOff: [{ date: '2026-09-21', startHour: 0, endHour: 24 }], pins: [{ date: '2026-09-22', startHour: 9, endHour: 10 }] },
+      ana: {
+        timeOff: [{ startDate: '2026-09-21', startHour: 0, endDate: '2026-09-21', endHour: 24 }],
+        pins: [{ date: '2026-09-22', startHour: 9, endHour: 10 }],
+      },
     }
     const [resolved] = resolveWeek([input], '2026-09-21', exceptions)
     expect(Array.from(input.availability)).toEqual(before)
@@ -105,6 +111,71 @@ describe('resolveWeek', () => {
   it('passes employees without entries through untouched', () => {
     const input = employee()
     expect(resolveWeek([input], '2026-09-21', {})[0]).toBe(input)
-    expect(resolveWeek([input], null, { ana: { timeOff: [{ date: '2026-09-21', startHour: 0, endHour: 24 }], pins: [] } })[0]).toBe(input)
+    const off = { startDate: '2026-09-21', startHour: 0, endDate: '2026-09-21', endHour: 24 }
+    expect(resolveWeek([input], null, { ana: { timeOff: [off], pins: [] } })[0]).toBe(input)
+  })
+
+  /** Unavailable slots after resolving `span` against the week of 2026-09-21. */
+  const offSlots = (span: { startDate: string; startHour: number; endDate: string; endHour: number }) => {
+    const [resolved] = resolveWeek([employee()], '2026-09-21', { ana: { timeOff: [span], pins: [] } })
+    const slots: number[] = []
+    resolved.availability.forEach((v, slot) => v === Availability.Unavailable && slots.push(slot))
+    return slots
+  }
+  const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => from + i)
+
+  it('treats a multi-day span as one continuous block', () => {
+    // Mon 2pm through to Wed 11am: the rest of Monday, all of Tuesday, Wednesday morning.
+    expect(offSlots({ startDate: '2026-09-21', startHour: 14, endDate: '2026-09-23', endHour: 11 })).toEqual(
+      range(slotIndex(0, 14), slotIndex(2, 11)),
+    )
+  })
+
+  it('clips spans that start before or end after the week', () => {
+    expect(offSlots({ startDate: '2026-09-18', startHour: 9, endDate: '2026-09-22', endHour: 10 })).toEqual(
+      range(0, slotIndex(1, 10)),
+    )
+    expect(offSlots({ startDate: '2026-09-27', startHour: 20, endDate: '2026-09-30', endHour: 24 })).toEqual(
+      range(slotIndex(6, 20), WEEK_HOURS),
+    )
+    expect(offSlots({ startDate: '2026-09-14', startHour: 0, endDate: '2026-09-20', endHour: 24 })).toEqual([])
+    expect(offSlots({ startDate: '2026-09-28', startHour: 0, endDate: '2026-09-28', endHour: 1 })).toEqual([])
+  })
+})
+
+describe('time spans', () => {
+  const span = (startDate: string, startHour: number, endDate: string, endHour: number) => ({
+    startDate,
+    startHour,
+    endDate,
+    endHour,
+  })
+
+  it('accepts only real, forward spans', () => {
+    expect(spanIsValid(span('2026-09-22', 0, '2026-09-22', 24))).toBe(true)
+    expect(spanIsValid(span('2026-09-22', 14, '2026-09-24', 11))).toBe(true)
+    expect(spanIsValid(span('2026-09-22', 23, '2026-09-23', 0))).toBe(true)
+    expect(spanIsValid(span('2026-09-22', 12, '2026-09-22', 12))).toBe(false)
+    expect(spanIsValid(span('2026-09-24', 0, '2026-09-22', 24))).toBe(false)
+    expect(spanIsValid(span('2026-09-22', 0, '2026-02-30', 24))).toBe(false)
+    expect(spanIsValid(span('2026-09-22', 0, '2026-09-22', 25))).toBe(false)
+    expect(spanIsValid(span('2026-09-22', 1.5, '2026-09-22', 3))).toBe(false)
+  })
+
+  it('places spans relative to a week, counting any overlap as this week', () => {
+    const week = '2026-09-21'
+    expect(spanTiming(week, span('2026-09-14', 0, '2026-09-20', 24))).toBe('past')
+    expect(spanTiming(week, span('2026-09-20', 22, '2026-09-21', 1))).toBe('thisWeek')
+    expect(spanTiming(week, span('2026-09-27', 23, '2026-09-29', 24))).toBe('thisWeek')
+    expect(spanTiming(week, span('2026-09-28', 0, '2026-09-28', 5))).toBe('later')
+  })
+
+  it('formats every shape', () => {
+    expect(formatSpan(span('2026-09-22', 0, '2026-09-22', 24))).toBe('Tue 22 Sep, all day')
+    expect(formatSpan(span('2026-09-22', 0, '2026-09-25', 24))).toBe('Tue 22 – Fri 25 Sep, all day')
+    expect(formatSpan(span('2026-09-29', 0, '2026-10-02', 24))).toBe('Tue 29 Sep – Fri 2 Oct, all day')
+    expect(formatSpan(span('2026-09-22', 9, '2026-09-22', 12))).toBe('Tue 22 Sep, 9am–12pm')
+    expect(formatSpan(span('2026-09-22', 14, '2026-09-24', 11))).toBe('Tue 22 Sep 2pm – Thu 24 Sep 11am')
+    expect(formatSpan(span('2026-09-22', 18, '2026-09-22', 24))).toBe('Tue 22 Sep, 6pm–12am')
   })
 })

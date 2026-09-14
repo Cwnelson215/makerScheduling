@@ -1,4 +1,12 @@
-import { isIsoDate, mondayOf, resolveWeek, type DatedHours, type EmployeeExceptions } from './calendar'
+import {
+  isIsoDate,
+  mondayOf,
+  resolveWeek,
+  spanIsValid,
+  type DatedHours,
+  type EmployeeExceptions,
+  type TimeSpan,
+} from './calendar'
 import { DEFAULT_CONFIG } from './config'
 import { normaliseRuleSettings, type RuleSetting } from './rules/catalog'
 import {
@@ -19,10 +27,14 @@ export type HourRange = [number, number]
 export type CoverageRange = [number, number, number]
 
 /** Time off on a date; omitting `hours` means the whole day. */
-export interface TimeOffJson {
-  date: string
-  hours?: HourRange
-}
+/**
+ * Time off: one day (`date`, optionally just `hours` of it), or a continuous stretch `from` one
+ * date `to` another. `fromHour` defaults to the start of `from`; without `toHour` the stretch runs
+ * to the end of `to`, so `{ "from": "…22", "to": "…25" }` is four whole days.
+ */
+export type TimeOffJson =
+  | { date: string; hours?: HourRange }
+  | { from: string; to: string; fromHour?: number; toHour?: number }
 
 /** Hours an employee must work on a date. */
 export interface PinJson {
@@ -197,9 +209,27 @@ export function parseScenario(json: ScenarioJson): Scenario {
       return { date, startHour: hours[0], endHour: hours[1] }
     }
     exceptions[raw.id] = {
-      timeOff: (raw.timeOff ?? []).map((entry, i) =>
-        dated(entry.date, entry.hours ?? [0, HOURS_PER_DAY], `employee "${raw.id}".timeOff[${i}]`),
-      ),
+      timeOff: (raw.timeOff ?? []).map((entry, i) => {
+        const where = `employee "${raw.id}".timeOff[${i}]`
+        if ('date' in entry) {
+          const { date, startHour, endHour } = dated(entry.date, entry.hours ?? [0, HOURS_PER_DAY], where)
+          return { startDate: date, startHour, endDate: date, endHour }
+        }
+        if (weekStart === null) throw new ScenarioError(`${where}: dated entries need a top-level weekStart`)
+        const span: TimeSpan = {
+          startDate: entry.from,
+          startHour: entry.fromHour ?? 0,
+          endDate: entry.to,
+          endHour: entry.toHour ?? HOURS_PER_DAY,
+        }
+        if (!isIsoDate(span.startDate) || !isIsoDate(span.endDate)) {
+          throw new ScenarioError(`${where}: "from" and "to" must be YYYY-MM-DD dates`)
+        }
+        if (!spanIsValid(span)) {
+          throw new ScenarioError(`${where}: hours must be whole numbers 0–24 and the end must be after the start`)
+        }
+        return span
+      }),
       pins: (raw.pins ?? []).map((entry, i) => {
         const where = `employee "${raw.id}".pins[${i}]`
         if (!Array.isArray(entry.hours)) throw new ScenarioError(`${where}: a pin needs hours`)
@@ -288,9 +318,19 @@ export function serializeScenario(scenario: Scenario): ScenarioJson {
       preferred,
       notPreferred,
       ...(timeOff.length > 0 && {
-        timeOff: timeOff.map(({ date, startHour, endHour }): TimeOffJson =>
-          startHour === 0 && endHour === HOURS_PER_DAY ? { date } : { date, hours: [startHour, endHour] },
-        ),
+        timeOff: timeOff.map(({ startDate, startHour, endDate, endHour }): TimeOffJson => {
+          if (startDate === endDate) {
+            return startHour === 0 && endHour === HOURS_PER_DAY
+              ? { date: startDate }
+              : { date: startDate, hours: [startHour, endHour] }
+          }
+          return {
+            from: startDate,
+            to: endDate,
+            ...(startHour !== 0 && { fromHour: startHour }),
+            ...(endHour !== HOURS_PER_DAY && { toHour: endHour }),
+          }
+        }),
       }),
       ...(pins.length > 0 && {
         pins: pins.map(({ date, startHour, endHour }): PinJson => ({ date, hours: [startHour, endHour] })),

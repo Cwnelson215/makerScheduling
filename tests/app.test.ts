@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  addException,
+  addTimeOff,
+  clearWeekPins,
   entryTiming,
   loadProject,
   normaliseProject,
@@ -8,9 +9,11 @@ import {
   projectProblems,
   projectToProblem,
   projectToScenario,
-  removeException,
+  removePin,
+  removeTimeOff,
   saveProject,
   setOperatingWindow,
+  setPinnedHour,
   setWeekStart,
   STORAGE_KEY,
 } from '../src/app/project'
@@ -41,9 +44,25 @@ describe('scenario serialization', () => {
     const json = serializeScenario(datedScenario())
     expect(json.weekStart).toBe(FIXTURE_WEEK)
     // Whole-day time off is written without hours, as someone would write it by hand.
-    expect(json.employees.find((e) => e.id === 'ben')!.timeOff).toEqual([{ date: '2026-09-22' }])
+    // Multi-day time off is written as from/to, leaving out the whole-day default hours.
+    expect(json.employees.find((e) => e.id === 'ben')!.timeOff).toEqual([{ from: '2026-09-22', to: '2026-09-23' }])
+    expect(json.employees.find((e) => e.id === 'ana')!.timeOff).toEqual([
+      { from: '2026-09-29', to: '2026-10-01', fromHour: 14, toHour: 11 },
+    ])
     expect(json.employees.find((e) => e.id === 'cleo')!.pins).toEqual([{ date: '2026-09-22', hours: [13, 14] }])
     expect(plain(parseScenario(JSON.parse(JSON.stringify(json))))).toEqual(plain(datedScenario()))
+  })
+
+  it('reads single-day time off, whole or in hours, as one-day spans', () => {
+    const json = serializeScenario(datedScenario())
+    json.employees[1].timeOff = [{ date: '2026-09-22' }, { date: '2026-09-21', hours: [9, 12] }]
+    const parsed = parseScenario(json)
+    expect(parsed.exceptions.ben.timeOff).toEqual([
+      { startDate: '2026-09-22', startHour: 0, endDate: '2026-09-22', endHour: 24 },
+      { startDate: '2026-09-21', startHour: 9, endDate: '2026-09-21', endHour: 12 },
+    ])
+    // And writes them back in the same single-day form.
+    expect(serializeScenario(parsed).employees[1].timeOff).toEqual(json.employees[1].timeOff)
   })
 
   it('rejects malformed dated entries with a readable reason', () => {
@@ -57,6 +76,12 @@ describe('scenario serialization', () => {
     expectError((j) => delete j.weekStart, 'dated entries need a top-level weekStart')
     expectError((j) => (j.weekStart = '2026-09-23'), 'must be a Monday')
     expectError((j) => (j.employees[1].timeOff = [{ date: '2026-02-30' }]), 'is not a YYYY-MM-DD date')
+    expectError((j) => (j.employees[1].timeOff = [{ from: '2026-09-24', to: '2026-09-22' }]), 'the end must be after the start')
+    expectError(
+      (j) => (j.employees[1].timeOff = [{ from: '2026-09-22', to: '2026-09-22', fromHour: 14, toHour: 11 }]),
+      'the end must be after the start',
+    )
+    expectError((j) => (j.employees[1].timeOff = [{ from: '2026-09-22', to: 'soon' }]), '"from" and "to" must be YYYY-MM-DD dates')
     expectError((j) => (j.employees[2].pins = [{ date: '2026-09-22' } as never]), 'a pin needs hours')
     expectError((j) => (j.employees[2].pins = [{ date: '2026-09-22', hours: [14, 13] }]), 'out of bounds or empty')
   })
@@ -163,28 +188,65 @@ describe('project model', () => {
     expect(normaliseProject({ ...project, weekStart: '2026-09-22' })).toBeNull()
   })
 
-  it('edits the week and dated entries', () => {
+  it('migrates single-day time off from earlier saves', () => {
+    const project = projectFromScenario(datedScenario())
+    const saved = JSON.parse(JSON.stringify(project))
+    saved.employees[1].timeOff = [{ id: 'old', date: '2026-09-22', startHour: 9, endHour: 12 }]
+    expect(normaliseProject(saved)!.employees[1].timeOff).toEqual([
+      { id: 'old', startDate: '2026-09-22', startHour: 9, endDate: '2026-09-22', endHour: 12 },
+    ])
+    saved.employees[1].timeOff = [{ id: 'bad', startDate: '2026-09-24', startHour: 0, endDate: '2026-09-22', endHour: 24 }]
+    expect(normaliseProject(saved)).toBeNull()
+  })
+
+  it('adds and removes time off spans', () => {
     let project = projectFromScenario(datedScenario())
     expect(setWeekStart(project, '2026-10-01').weekStart).toBe('2026-09-28')
 
-    const ana = project.employees[0].id
-    project = addException(project, ana, 'pins', { date: '2026-09-22', startHour: 9, endHour: 12 })
-    project = addException(project, ana, 'pins', { date: '2026-09-18', startHour: 9, endHour: 10 })
-    expect(project.employees[0].pins.map((p) => p.date)).toEqual(['2026-09-18', '2026-09-21', '2026-09-22'])
-    expect(project.employees[0].pins.map((p) => entryTiming(project, p))).toEqual(['past', 'thisWeek', 'thisWeek'])
+    project = addTimeOff(project, 'cleo', { startDate: '2026-09-25', startHour: 14, endDate: '2026-09-28', endHour: 11 })
+    project = addTimeOff(project, 'cleo', { startDate: '2026-09-15', startHour: 0, endDate: '2026-09-16', endHour: 24 })
+    const cleo = () => project.employees.find((e) => e.id === 'cleo')!
+    expect(cleo().timeOff.map((t) => t.startDate)).toEqual(['2026-09-15', '2026-09-25'])
+    expect(cleo().timeOff.map((t) => entryTiming(project, t))).toEqual(['past', 'thisWeek'])
     expect(entryTiming(project, project.employees[0].timeOff[0])).toBe('later')
 
-    const removed = removeException(project, ana, 'pins', project.employees[0].pins[0].id)
-    expect(removed.employees[0].pins.map((p) => p.date)).toEqual(['2026-09-21', '2026-09-22'])
-    expect(removed.employees[1]).toBe(project.employees[1])
+    // A backwards span is refused rather than stored.
+    expect(addTimeOff(project, 'cleo', { startDate: '2026-09-25', startHour: 0, endDate: '2026-09-24', endHour: 24 })).toBe(project)
+
+    const removed = removeTimeOff(project, 'cleo', cleo().timeOff[0].id)
+    expect(removed.employees.find((e) => e.id === 'cleo')!.timeOff.map((t) => t.startDate)).toEqual(['2026-09-25'])
+    expect(removed.employees[0]).toBe(project.employees[0])
+  })
+
+  it('paints pins into contiguous runs on the dates of the week shown', () => {
+    let project = projectFromScenario(datedScenario())
+    const pinsOf = (p = project) => p.employees.find((e) => e.id === 'ben')!.pins.map((x) => [x.date, x.startHour, x.endHour])
+
+    for (const hour of [9, 10, 11]) project = setPinnedHour(project, 'ben', slotIndex(0, hour), true)
+    project = setPinnedHour(project, 'ben', slotIndex(3, 14), true)
+    expect(pinsOf()).toEqual([['2026-09-21', 9, 12], ['2026-09-24', 14, 15]])
+
+    // Unpinning the middle hour splits the run; repainting an already pinned hour is a no-op.
+    project = setPinnedHour(project, 'ben', slotIndex(0, 10), false)
+    expect(pinsOf()).toEqual([['2026-09-21', 9, 10], ['2026-09-21', 11, 12], ['2026-09-24', 14, 15]])
+    expect(setPinnedHour(project, 'ben', slotIndex(0, 9), true)).toBe(project)
+
+    // The same grid cell in another week is another date; other employees are untouched.
+    const nextWeek = setPinnedHour(setWeekStart(project, '2026-09-28'), 'ben', slotIndex(0, 9), true)
+    expect(pinsOf(nextWeek)).toContainEqual(['2026-09-28', 9, 10])
+    expect(nextWeek.employees[0]).toBe(project.employees[0])
+
+    // Clearing a week leaves other weeks' pins alone.
+    expect(pinsOf(clearWeekPins(nextWeek, 'ben'))).toEqual([['2026-09-21', 9, 10], ['2026-09-21', 11, 12], ['2026-09-24', 14, 15]])
+    expect(pinsOf(clearWeekPins(project, 'ben'))).toEqual([])
+
+    const first = project.employees.find((e) => e.id === 'ben')!.pins[0]
+    expect(pinsOf(removePin(project, 'ben', first.id))).toEqual([['2026-09-21', 11, 12], ['2026-09-24', 14, 15]])
   })
 
   it('reports a pin that clashes with time off', () => {
-    const project = addException(projectFromScenario(datedScenario()), 'ben', 'pins', {
-      date: '2026-09-22',
-      startHour: 10,
-      endHour: 13,
-    })
+    let project = projectFromScenario(datedScenario())
+    for (const hour of [10, 11, 12]) project = setPinnedHour(project, 'ben', slotIndex(1, hour), true)
     expect(projectProblems(project)).toContain(
       'Ben is pinned Tue 10am–1pm but is unavailable then (availability or time off)',
     )

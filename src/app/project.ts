@@ -1,15 +1,17 @@
 import {
   addDays,
-  formatShortDate,
   isIsoDate,
   mondayOf,
-  parseIsoDate,
   resolveWeek,
+  spanIsValid,
+  spanSlots,
+  spanTiming,
   todayIso,
   weekDayIndex,
   type DatedHours,
   type EmployeeExceptions,
   type IsoDate,
+  type TimeSpan,
 } from '../core/calendar'
 import { ConfigError, DEFAULT_CONFIG, validateProblem } from '../core/config'
 import type { Scenario } from '../core/io'
@@ -63,16 +65,19 @@ export interface ProjectEmployee {
   targetWeeklyHours: number
   /** 168 entries of {@link Availability}. The recurring week; time off overrides it. */
   availability: number[]
-  timeOff: ProjectException[]
-  pins: ProjectException[]
+  timeOff: ProjectTimeOff[]
+  /** Painted onto the grid a week at a time; stored as contiguous runs per date. */
+  pins: ProjectPin[]
 }
 
-/** A dated time-off or pin entry, with an id so the editor can list and remove it. */
-export interface ProjectException extends DatedHours {
+/** Ids let the editor list and remove entries. */
+export interface ProjectTimeOff extends TimeSpan {
   id: string
 }
 
-export type ExceptionKind = 'timeOff' | 'pins'
+export interface ProjectPin extends DatedHours {
+  id: string
+}
 
 export type ShiftRules = Pick<
   ScheduleConfig,
@@ -121,8 +126,6 @@ function shiftRulesOf(config: ScheduleConfig): ShiftRules {
 
 /** A scenario without a week of its own is scheduled for the current week. */
 export function projectFromScenario(scenario: Scenario, search = DEFAULT_SEARCH, today = todayIso()): Project {
-  const entries = (list: DatedHours[] | undefined): ProjectException[] =>
-    (list ?? []).map(({ date, startHour, endHour }) => ({ id: newId(), date, startHour, endHour }))
   return {
     version: 1,
     name: scenario.name,
@@ -136,8 +139,8 @@ export function projectFromScenario(scenario: Scenario, search = DEFAULT_SEARCH,
       maxWeeklyHours: e.maxWeeklyHours,
       targetWeeklyHours: e.targetWeeklyHours,
       availability: Array.from(e.availability),
-      timeOff: entries(scenario.exceptions[e.id]?.timeOff),
-      pins: entries(scenario.exceptions[e.id]?.pins),
+      timeOff: (scenario.exceptions[e.id]?.timeOff ?? []).map((span) => ({ id: newId(), ...span })),
+      pins: (scenario.exceptions[e.id]?.pins ?? []).map((pin) => ({ id: newId(), ...pin })),
     })),
     rules: scenario.rules.map((r) => ({ ...r })),
     threshold: scenario.threshold,
@@ -152,9 +155,14 @@ export function projectToProblem(project: Project): { employees: Employee[]; con
 }
 
 function projectExceptions(project: Project): Record<string, EmployeeExceptions> {
-  const strip = ({ date, startHour, endHour }: ProjectException): DatedHours => ({ date, startHour, endHour })
   return Object.fromEntries(
-    project.employees.map((e) => [e.id, { timeOff: e.timeOff.map(strip), pins: e.pins.map(strip) }]),
+    project.employees.map((e) => [
+      e.id,
+      {
+        timeOff: e.timeOff.map(({ id: _id, ...span }) => span),
+        pins: e.pins.map(({ id: _id, ...pin }) => pin),
+      },
+    ]),
   )
 }
 
@@ -284,33 +292,71 @@ export function setWeekStart(project: Project, date: IsoDate): Project {
   return isIsoDate(date) ? { ...project, weekStart: mondayOf(date) } : project
 }
 
-export function addException(
-  project: Project,
-  employeeId: string,
-  kind: ExceptionKind,
-  entry: DatedHours,
-): Project {
-  return {
-    ...project,
-    employees: project.employees.map((e) =>
-      e.id === employeeId
-        ? { ...e, [kind]: sortByDate([...e[kind], { id: newId(), ...entry }]) }
-        : e,
-    ),
-  }
+/** Applies `change` to one employee, leaving every other employee object untouched. */
+function withEmployee(project: Project, id: string, change: (e: ProjectEmployee) => ProjectEmployee): Project {
+  return { ...project, employees: project.employees.map((e) => (e.id === id ? change(e) : e)) }
 }
 
-export function removeException(project: Project, employeeId: string, kind: ExceptionKind, id: string): Project {
-  return {
-    ...project,
-    employees: project.employees.map((e) =>
-      e.id === employeeId ? { ...e, [kind]: e[kind].filter((x) => x.id !== id) } : e,
+/** Adds time off, ignoring a span that isn't valid. */
+export function addTimeOff(project: Project, employeeId: string, span: TimeSpan): Project {
+  if (!spanIsValid(span)) return project
+  return withEmployee(project, employeeId, (e) => ({
+    ...e,
+    timeOff: [...e.timeOff, { id: newId(), ...span }].sort(
+      (a, b) => a.startDate.localeCompare(b.startDate) || a.startHour - b.startHour,
     ),
-  }
+  }))
 }
 
-function sortByDate(entries: ProjectException[]): ProjectException[] {
-  return entries.slice().sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour)
+export function removeTimeOff(project: Project, employeeId: string, id: string): Project {
+  return withEmployee(project, employeeId, (e) => ({ ...e, timeOff: e.timeOff.filter((x) => x.id !== id) }))
+}
+
+export function removePin(project: Project, employeeId: string, id: string): Project {
+  return withEmployee(project, employeeId, (e) => ({ ...e, pins: e.pins.filter((x) => x.id !== id) }))
+}
+
+/**
+ * Pins or unpins one hour of the week on screen. The date's pins are rebuilt as contiguous runs,
+ * so painting 9, 10 and 11 stores a single 9–12 pin and unpinning 10 splits it in two.
+ */
+export function setPinnedHour(project: Project, employeeId: string, slot: number, pinned: boolean): Project {
+  const date = addDays(project.weekStart, Math.floor(slot / HOURS_PER_DAY))
+  const hour = slot % HOURS_PER_DAY
+  const employee = project.employees.find((e) => e.id === employeeId)
+  if (!employee) return project
+
+  const hours = new Array<boolean>(HOURS_PER_DAY).fill(false)
+  for (const pin of employee.pins) {
+    if (pin.date === date) for (let h = pin.startHour; h < pin.endHour; h++) hours[h] = true
+  }
+  if (hours[hour] === pinned) return project
+  hours[hour] = pinned
+
+  const runs: ProjectPin[] = []
+  let start = -1
+  for (let h = 0; h <= HOURS_PER_DAY; h++) {
+    const set = h < HOURS_PER_DAY && hours[h]
+    if (set && start < 0) start = h
+    if (!set && start >= 0) {
+      runs.push({ id: newId(), date, startHour: start, endHour: h })
+      start = -1
+    }
+  }
+  return withEmployee(project, employeeId, (e) => ({
+    ...e,
+    pins: [...e.pins.filter((p) => p.date !== date), ...runs].sort(
+      (a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour,
+    ),
+  }))
+}
+
+/** Removes the employee's pins dated in the week on screen; other weeks' pins stay. */
+export function clearWeekPins(project: Project, employeeId: string): Project {
+  return withEmployee(project, employeeId, (e) => ({
+    ...e,
+    pins: e.pins.filter((p) => weekDayIndex(project.weekStart, p.date) === null),
+  }))
 }
 
 /** Column headers for the project's week: `'Mon 21'`. */
@@ -318,30 +364,29 @@ export function weekDayLabels(project: Project): string[] {
   return DAY_NAMES.map((name, day) => `${name} ${Number(addDays(project.weekStart, day).slice(8))}`)
 }
 
-/** `'Tue 22 Sep'`. */
-export function formatEntryDate(date: IsoDate): string {
-  const weekday = DAY_NAMES[weekDayIndex(mondayOf(date), date)!]
-  return `${weekday} ${formatShortDate(date)}`
-}
-
 /** 168-entry grids marking which hours this week's time off and pins cover for `employee`. */
 export function weekMarks(project: Project, employee: ProjectEmployee): { timeOff: boolean[]; pinned: boolean[] } {
-  const mark = (entries: DatedHours[]) => {
-    const grid = new Array<boolean>(WEEK_HOURS).fill(false)
-    for (const entry of entries) {
-      const day = weekDayIndex(project.weekStart, entry.date)
-      if (day === null) continue
-      for (let hour = entry.startHour; hour < entry.endHour; hour++) grid[slotIndex(day, hour)] = true
-    }
-    return grid
+  const timeOff = new Array<boolean>(WEEK_HOURS).fill(false)
+  for (const span of employee.timeOff) {
+    const { from, to } = spanSlots(project.weekStart, span)
+    for (let slot = from; slot < to; slot++) timeOff[slot] = true
   }
-  return { timeOff: mark(employee.timeOff), pinned: mark(employee.pins) }
+  const pinned = new Array<boolean>(WEEK_HOURS).fill(false)
+  for (const pin of employee.pins) {
+    const day = weekDayIndex(project.weekStart, pin.date)
+    if (day === null) continue
+    for (let hour = pin.startHour; hour < pin.endHour; hour++) pinned[slotIndex(day, hour)] = true
+  }
+  return { timeOff, pinned }
 }
 
-/** Where a dated entry falls relative to the project's week. */
-export function entryTiming(project: Project, entry: DatedHours): 'past' | 'thisWeek' | 'later' {
-  const offset = parseIsoDate(entry.date)! - parseIsoDate(project.weekStart)!
-  return offset < 0 ? 'past' : offset < DAYS_PER_WEEK ? 'thisWeek' : 'later'
+/** Where time off or a pin falls relative to the project's week. */
+export function entryTiming(project: Project, entry: TimeSpan | DatedHours): 'past' | 'thisWeek' | 'later' {
+  const span: TimeSpan =
+    'date' in entry
+      ? { startDate: entry.date, startHour: entry.startHour, endDate: entry.date, endHour: entry.endHour }
+      : entry
+  return spanTiming(project.weekStart, span)
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +395,7 @@ export function entryTiming(project: Project, entry: DatedHours): 'past' | 'this
 
 export const STORAGE_KEY = 'scheduleMaker.project.v1'
 
-const isEntry = (value: unknown): value is DatedHours => {
+const isDatedHours = (value: unknown): value is DatedHours => {
   const v = value as Partial<DatedHours> | null
   return (
     typeof v === 'object' && v !== null && isIsoDate(v.date) &&
@@ -359,16 +404,38 @@ const isEntry = (value: unknown): value is DatedHours => {
   )
 }
 
-/** Entries from storage, or `null` if any is malformed. Missing lists are older saves: empty. */
-function normaliseEntries(raw: unknown): ProjectException[] | null {
+const entryId = (raw: unknown) => {
+  const id = (raw as { id?: unknown }).id
+  return typeof id === 'string' ? id : newId()
+}
+
+/** Pins from storage, or `null` if any is malformed. A missing list is an older save: empty. */
+function normalisePins(raw: unknown): ProjectPin[] | null {
   if (raw === undefined) return []
-  if (!Array.isArray(raw) || !raw.every(isEntry)) return null
-  return raw.map((entry) => ({
-    id: typeof (entry as Partial<ProjectException>).id === 'string' ? (entry as ProjectException).id : newId(),
-    date: entry.date,
-    startHour: entry.startHour,
-    endHour: entry.endHour,
-  }))
+  if (!Array.isArray(raw) || !raw.every(isDatedHours)) return null
+  return raw.map((pin) => ({ id: entryId(pin), date: pin.date, startHour: pin.startHour, endHour: pin.endHour }))
+}
+
+/**
+ * Time off from storage, or `null` if any entry is malformed. Early saves stored single-day
+ * `{ date, startHour, endHour }` entries; those become one-day spans.
+ */
+function normaliseTimeOff(raw: unknown): ProjectTimeOff[] | null {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) return null
+  const out: ProjectTimeOff[] = []
+  for (const entry of raw) {
+    if (isDatedHours(entry)) {
+      out.push({ id: entryId(entry), startDate: entry.date, startHour: entry.startHour, endDate: entry.date, endHour: entry.endHour })
+      continue
+    }
+    const span = entry as Partial<TimeSpan> | null
+    if (typeof span !== 'object' || span === null) return null
+    const candidate = { startDate: span.startDate, startHour: span.startHour, endDate: span.endDate, endHour: span.endHour } as TimeSpan
+    if (!spanIsValid(candidate)) return null
+    out.push({ id: entryId(entry), ...candidate })
+  }
+  return out
 }
 
 const isGrid = (value: unknown): value is number[] =>
@@ -390,8 +457,8 @@ export function normaliseProject(raw: unknown, today = todayIso()): Project | nu
   const employees: ProjectEmployee[] = []
   for (const e of p.employees) {
     if (typeof e?.id !== 'string' || typeof e.name !== 'string' || !isGrid(e.availability)) return null
-    const timeOff = normaliseEntries(e.timeOff)
-    const pins = normaliseEntries(e.pins)
+    const timeOff = normaliseTimeOff(e.timeOff)
+    const pins = normalisePins(e.pins)
     if (!timeOff || !pins) return null
     employees.push({ ...e, timeOff, pins })
   }

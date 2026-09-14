@@ -1,13 +1,14 @@
 import { useState } from 'react'
-import { formatWeekRange } from '../../core/calendar'
 import { fmtHour } from '../../core/config'
-import { Availability, DAY_NAMES, WEEK_HOURS } from '../../core/types'
+import { Availability, DAY_NAMES, HOURS_PER_DAY, WEEK_HOURS } from '../../core/types'
 import {
   isOpen,
   newEmployee,
   newId,
   openSlots,
+  clearWeekPins,
   paintGrid,
+  setPinnedHour,
   updateEmployee,
   visibleHours,
   weekDayLabels,
@@ -18,6 +19,7 @@ import {
 import { ExceptionsEditor } from './ExceptionsEditor'
 import { NumberField } from './NumberField'
 import { WeekGrid } from './WeekGrid'
+import { WeekPicker } from './WeekPicker'
 
 const LEVELS: { value: Availability; label: string }[] = [
   { value: Availability.Preferred, label: 'Preferred' },
@@ -27,9 +29,12 @@ const LEVELS: { value: Availability; label: string }[] = [
 
 const levelName = (value: number) => LEVELS.find((l) => l.value === value)?.label ?? 'Unavailable'
 
+/** An availability level for the usual week, or a pin brush for the dated week on screen. */
+type Brush = Availability | 'pin' | 'unpin'
+
 export function EmployeesPanel({ project, update }: { project: Project; update: ProjectUpdate }) {
   const [selectedId, setSelectedId] = useState<string | null>(project.employees[0]?.id ?? null)
-  const [brush, setBrush] = useState<Availability>(Availability.Preferred)
+  const [brush, setBrush] = useState<Brush>(Availability.Preferred)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   const selected = project.employees.find((e) => e.id === selectedId) ?? project.employees[0] ?? null
@@ -110,13 +115,15 @@ export function EmployeesPanel({ project, update }: { project: Project; update: 
           </div>
 
           <div>
-            <h3>Availability</h3>
+            <h3>Availability & pins</h3>
             <p className="hint">
-              The usual week. Pick a level, then click or drag across the grid. Hours outside operating hours are faded;
-              they never get scheduled. Time off and pinned shifts for the week of {formatWeekRange(project.weekStart)} are
-              shown on top.
+              Availability is the usual week: pick a level, then click or drag across the grid. <strong>Pin</strong> and{' '}
+              <strong>Unpin</strong> paint shifts they must work on the dates shown, so change week with the arrows to pin
+              another week. Faded hours are outside operating hours and never get scheduled.
             </p>
           </div>
+
+          <WeekPicker project={project} update={update} />
 
           <div className="row">
             {LEVELS.map((level) => (
@@ -125,30 +132,46 @@ export function EmployeesPanel({ project, update }: { project: Project; update: 
                 {level.label}
               </button>
             ))}
+            <span className="brush-divider" aria-hidden="true" />
+            <button type="button" className="btn" aria-pressed={brush === 'pin'} onClick={() => setBrush('pin')}>
+              <span className="swatch avail-2 cell-pinned" style={{ marginRight: '0.4rem', verticalAlign: '-0.15rem' }} />
+              Pin
+            </button>
+            <button type="button" className="btn" aria-pressed={brush === 'unpin'} onClick={() => setBrush('unpin')}>
+              Unpin
+            </button>
             <span className="spacer" />
-            <button
-              type="button"
-              className="btn"
-              onClick={() =>
-                update((p) => {
-                  const current = p.employees.find((e) => e.id === selected.id)!
-                  return updateEmployee(p, selected.id, { availability: paintGrid(current.availability, openSlots(p), brush) })
-                })
-              }
-            >
-              Set all open hours to {levelName(brush).toLowerCase()}
-            </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={() =>
-                update((p) =>
-                  updateEmployee(p, selected.id, { availability: new Array<number>(WEEK_HOURS).fill(Availability.Unavailable) }),
-                )
-              }
-            >
-              Clear
-            </button>
+            {brush === 'pin' || brush === 'unpin' ? (
+              <button type="button" className="btn" onClick={() => update((p) => clearWeekPins(p, selected.id))}>
+                Clear pins this week
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() =>
+                    update((p) => {
+                      const current = p.employees.find((e) => e.id === selected.id)!
+                      return updateEmployee(p, selected.id, { availability: paintGrid(current.availability, openSlots(p), brush) })
+                    })
+                  }
+                >
+                  Set all open hours to {levelName(brush).toLowerCase()}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() =>
+                    update((p) =>
+                      updateEmployee(p, selected.id, { availability: new Array<number>(WEEK_HOURS).fill(Availability.Unavailable) }),
+                    )
+                  }
+                >
+                  Clear
+                </button>
+              </>
+            )}
           </div>
 
           <WeekGrid
@@ -158,7 +181,13 @@ export function EmployeesPanel({ project, update }: { project: Project; update: 
             onPaint={(slot) =>
               update((p) => {
                 const current = p.employees.find((e) => e.id === selected.id)
-                return current ? updateEmployee(p, selected.id, { availability: paintGrid(current.availability, [slot], brush) }) : p
+                if (!current) return p
+                if (brush === 'pin' || brush === 'unpin') {
+                  // A closed hour can never be worked, so a stroke passing over it doesn't pin it.
+                  const closed = !isOpen(p, Math.floor(slot / HOURS_PER_DAY), slot % HOURS_PER_DAY)
+                  return brush === 'pin' && closed ? p : setPinnedHour(p, selected.id, slot, brush === 'pin')
+                }
+                return updateEmployee(p, selected.id, { availability: paintGrid(current.availability, [slot], brush) })
               })
             }
             describe={(slot, day, hour) => {
@@ -191,12 +220,12 @@ export function EmployeesPanel({ project, update }: { project: Project; update: 
           <div>
             <h3>Time off & pinned shifts</h3>
             <p className="hint">
-              Tied to dates. Only entries in the week you're scheduling ({formatWeekRange(project.weekStart)}, set on the
-              Setup tab) affect results. Entries for other weeks are kept for when you get there.
+              Tied to dates. Only entries in the week being scheduled affect results; entries for other weeks are kept for
+              when you get there.
             </p>
           </div>
-          {/* Keyed so a half-filled form resets when the employee or week changes. */}
-          <ExceptionsEditor key={`${selected.id}:${project.weekStart}`} project={project} employee={selected} update={update} />
+          {/* Keyed so a half-filled form resets when another employee is selected. */}
+          <ExceptionsEditor key={selected.id} project={project} employee={selected} update={update} />
         </section>
       ) : (
         <section className="panel">

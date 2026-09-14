@@ -24,16 +24,16 @@ export const FIXTURE_WEEK = '2026-09-21'
 
 /**
  * Dated exceptions for `small-cafe.json` (open Mon and Tue, 9am–3pm), exercising every kind:
- * a pin that removes Ana's Monday day-off and forces an early start, whole-day time off for
- * Ben on Tuesday, a single pinned hour for Cleo that several shifts can cover, and an entry
- * dated outside the week that must be ignored.
+ * a pin that removes Ana's Monday day-off and forces an early start, time off for Ben running
+ * from the start of Tuesday through the closed Wednesday, a single pinned hour for Cleo that
+ * several shifts can cover, and a multi-day span in a later week that must be ignored.
  */
 export const SMALL_CAFE_EXCEPTIONS: Record<string, EmployeeExceptions> = {
   ana: {
     pins: [{ date: '2026-09-21', startHour: 9, endHour: 11 }],
-    timeOff: [{ date: '2026-09-30', startHour: 0, endHour: 24 }],
+    timeOff: [{ startDate: '2026-09-29', startHour: 14, endDate: '2026-10-01', endHour: 11 }],
   },
-  ben: { pins: [], timeOff: [{ date: '2026-09-22', startHour: 0, endHour: 24 }] },
+  ben: { pins: [], timeOff: [{ startDate: '2026-09-22', startHour: 0, endDate: '2026-09-23', endHour: 24 }] },
   cleo: { pins: [{ date: '2026-09-22', startHour: 13, endHour: 14 }], timeOff: [] },
 }
 

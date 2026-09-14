@@ -19,8 +19,10 @@ npm run solve -- src/fixtures/small-cafe.json   # the same solver from the comma
 1. **Setup** — the week you're scheduling, opening hours per day, shift-length limits, split
    shifts, and the minimum headcount for each hour (pick a number, then drag across the grid).
 2. **Employees** — add people, set target and maximum weekly hours, and paint their usual week
-   as preferred, not preferred, or unavailable. Below the grid, add **time off** and **pinned
-   shifts** on specific dates (see [Time off and pins](#time-off-and-pins)).
+   as preferred, not preferred, or unavailable. The **Pin** and **Unpin** brushes paint shifts
+   they must work on the dates of the week shown; use the week arrows to pin another week. Below
+   the grid, add **time off** as a start and an end, which can run across several days (see
+   [Time off and pins](#time-off-and-pins)).
 3. **Scoring** — turn rules on or off and set how many points each one costs.
 4. **Solve** — **Find achievable score** measures the best score this roster can reach and
    offers a threshold; **Build schedules** then searches, with live progress. Results show each
@@ -40,9 +42,14 @@ Availability describes a person's *usual* week. Time off and pins are tied to **
 and only apply when their date falls in the week being scheduled. Entries for other weeks are kept,
 so vacations can be entered ahead of time.
 
-- **Time off** makes those hours unavailable that week, overriding availability.
+- **Time off** runs from a start date and time to an end date and time, as one continuous block.
+  "Tue 2pm → Thu 11am" is off from Tuesday afternoon straight through to Thursday morning. Those
+  hours become unavailable, overriding availability; a span crossing into or out of the week
+  counts only the part inside it.
 - **A pin** means the person *must work at least* those hours. The solver may start earlier, end
-  later, or add a second block on a split-shift day. A pinned day can't be a day off.
+  later, or add a second block on a split-shift day. A pinned day can't be a day off. Pins are
+  painted onto the grid and saved against the dates of the week on screen; painting across a few
+  hours stores them as one run.
 
 Both are hard constraints, never scored. A pin that can't be honoured is reported before any
 search runs: outside opening hours, during time off or unavailable hours, longer than any legal
@@ -214,8 +221,9 @@ Scenario files use hour ranges rather than 168-entry grids. Anything not listed 
 
 `minCoverage` also accepts per-day ranges: `{ "Mon": [[8, 11, 1], [11, 14, 3]] }`.
 
-Dated entries need a top-level `weekStart`, which must be a Monday. Leave out `hours` for a
-whole day off:
+Dated entries need a top-level `weekStart`, which must be a Monday. Time off is either one
+`date` (optionally just `hours` of it) or a stretch `from` one date `to` another. `fromHour`
+defaults to the start of `from`; without `toHour` it runs to the end of `to`:
 
 ```json
 {
@@ -224,7 +232,11 @@ whole day off:
     {
       "id": "ana", "name": "Ana", "maxWeeklyHours": 12, "targetWeeklyHours": 8,
       "preferred": { "Mon": [[9, 15]], "Tue": [[9, 13]] },
-      "timeOff": [{ "date": "2026-09-22" }, { "date": "2026-10-05", "hours": [9, 12] }],
+      "timeOff": [
+        { "date": "2026-09-22" },
+        { "date": "2026-10-05", "hours": [9, 12] },
+        { "from": "2026-10-13", "to": "2026-10-15", "fromHour": 14, "toHour": 11 }
+      ],
       "pins": [{ "date": "2026-09-21", "hours": [9, 11] }]
     }
   ]
@@ -235,7 +247,7 @@ whole day off:
 
 ## Verification
 
-`npm test` — 174 tests. Three carry the correctness argument:
+`npm test` — 182 tests. Three carry the correctness argument:
 
 **`tests/solver.exhaustive.test.ts` — brute force vs. branch-and-bound.** On a fixture sized so
 full enumeration is feasible, the answer is computed twice: once by naive exhaustion with no
@@ -278,7 +290,7 @@ src/core/io.ts                 scenario file parsing and serialization
 src/cli.ts                     dev harness
 src/app/project.ts             editor model: plain-data project, edits, persistence
 src/app/useSolver.ts           owns the solver worker (progress, cancel, results)
-src/app/components/            Setup, Employees, Scoring, Solve screens; week grid; time off & pins
+src/app/components/            Setup, Employees, Scoring, Solve screens; week grid and picker; time off
 src/worker/                    worker entry, message protocol, request handler
 ```
 

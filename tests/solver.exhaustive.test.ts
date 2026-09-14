@@ -15,7 +15,7 @@ import {
 import { compileRules } from '../src/core/rules/registry'
 import type { Rule } from '../src/core/rules/types'
 import { solve } from '../src/core/search/solver'
-import { weekDayIndex } from '../src/core/calendar'
+import { addDays, weekDayIndex } from '../src/core/calendar'
 import { DAYS_PER_WEEK, HOURS_PER_DAY, type ProblemContext } from '../src/core/types'
 import {
   bruteForce,
@@ -196,28 +196,39 @@ describe('pins and time off', () => {
   const maskKey = (key: string, ctx: ProblemContext) =>
     key.split(',').map((index, slot) => ctx.patterns[slot][Number(index)].mask).join(',')
 
-  /** Plain reading of the dated entries: every pinned hour worked, no hour worked in time off. */
-  const honoursExceptions = (masks: number[]): boolean =>
-    raw.employees.every((employee, e) => {
+  /**
+   * Plain reading of the dated entries: every pinned hour worked, no hour worked during time off.
+   * Spans are walked hour by hour from their start, independently of `resolveWeek`.
+   */
+  const honoursExceptions = (masks: number[]): boolean => {
+    /** Whether employee `e` works `hour` on `date`, or `null` when the date is outside the week. */
+    const worked = (e: number, date: string, hour: number) => {
+      const day = weekDayIndex(FIXTURE_WEEK, date)
+      return day === null ? null : (masks[e * DAYS_PER_WEEK + day] & (1 << hour)) !== 0
+    }
+    return raw.employees.every((employee, e) => {
       const { pins, timeOff } = SMALL_CAFE_EXCEPTIONS[employee.id] ?? { pins: [], timeOff: [] }
-      const hoursOf = (entry: { date: string; startHour: number; endHour: number }) => {
-        const day = weekDayIndex(FIXTURE_WEEK, entry.date)
-        if (day === null) return null
-        let mask = 0
-        for (let hour = entry.startHour; hour < Math.min(entry.endHour, HOURS_PER_DAY); hour++) mask |= 1 << hour
-        return { worked: masks[e * DAYS_PER_WEEK + day], mask }
+      for (const pin of pins) {
+        for (let hour = pin.startHour; hour < pin.endHour; hour++) {
+          if (worked(e, pin.date, hour) === false) return false
+        }
       }
-      return (
-        pins.every((entry) => {
-          const h = hoursOf(entry)
-          return h === null || (h.worked & h.mask) === h.mask
-        }) &&
-        timeOff.every((entry) => {
-          const h = hoursOf(entry)
-          return h === null || (h.worked & h.mask) === 0
-        })
-      )
+      for (const span of timeOff) {
+        let date = span.startDate
+        let hour = span.startHour
+        while (date < span.endDate || (date === span.endDate && hour < span.endHour)) {
+          if (hour === HOURS_PER_DAY) {
+            date = addDays(date, 1)
+            hour = 0
+            continue
+          }
+          if (worked(e, date, hour) === true) return false
+          hour++
+        }
+      }
+      return true
     })
+  }
 
   it('actually constrains the fixture', () => {
     expect(searchSpaceSize(pinnedCtx)).toBeLessThan(searchSpaceSize(rawCtx))

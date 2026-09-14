@@ -25,9 +25,20 @@ export interface DatedHours {
   endHour: number
 }
 
+/**
+ * A continuous stretch of time, possibly across several days: from `startHour` on `startDate`
+ * up to (not including) `endHour` on `endDate`. A single whole day is `0` to `24` on one date.
+ */
+export interface TimeSpan {
+  startDate: IsoDate
+  startHour: number
+  endDate: IsoDate
+  endHour: number
+}
+
 export interface EmployeeExceptions {
-  /** Hours the employee cannot work, overriding their recurring availability. */
-  timeOff: DatedHours[]
+  /** Time the employee cannot work, overriding their recurring availability. */
+  timeOff: TimeSpan[]
   /** Hours the employee must work. The solver may extend the shift around them. */
   pins: DatedHours[]
 }
@@ -93,6 +104,33 @@ export function weekDayIndex(weekStart: IsoDate, date: IsoDate): number | null {
   return offset >= 0 && offset < DAYS_PER_WEEK ? offset : null
 }
 
+/** Hours from the start of `weekStart` to `hour` on `date`; negative before the week. */
+function weekHourOffset(weekStart: IsoDate, date: IsoDate, hour: number): number {
+  return (mustParse(date) - mustParse(weekStart)) * HOURS_PER_DAY + hour
+}
+
+/** Real dates, whole hours within 0–24, and an end strictly after the start. */
+export function spanIsValid(span: TimeSpan): boolean {
+  const hourOk = (h: number) => Number.isInteger(h) && h >= 0 && h <= HOURS_PER_DAY
+  if (!isIsoDate(span.startDate) || !isIsoDate(span.endDate)) return false
+  if (!hourOk(span.startHour) || !hourOk(span.endHour)) return false
+  return weekHourOffset(span.startDate, span.endDate, span.endHour) > span.startHour
+}
+
+/** Where a span sits relative to the week starting `weekStart`. */
+export function spanTiming(weekStart: IsoDate, span: TimeSpan): 'past' | 'thisWeek' | 'later' {
+  if (weekHourOffset(weekStart, span.endDate, span.endHour) <= 0) return 'past'
+  if (weekHourOffset(weekStart, span.startDate, span.startHour) >= WEEK_HOURS) return 'later'
+  return 'thisWeek'
+}
+
+/** Week-grid slots (`0..167`) the span covers within the week starting `weekStart`. */
+export function spanSlots(weekStart: IsoDate, span: TimeSpan): { from: number; to: number } {
+  const from = Math.max(0, weekHourOffset(weekStart, span.startDate, span.startHour))
+  const to = Math.min(WEEK_HOURS, weekHourOffset(weekStart, span.endDate, span.endHour))
+  return { from, to: Math.max(from, to) }
+}
+
 /** Short `'21 Sep'` label for a date. */
 export function formatShortDate(date: IsoDate): string {
   const d = new Date(mustParse(date) * MS_PER_DAY)
@@ -108,6 +146,37 @@ export function formatWeekRange(weekStart: IsoDate): string {
   if (fy !== ly) return `${fd} ${fm} ${fy} – ${ld} ${lm} ${ly}`
   if (fm !== lm) return `${fd} ${fm} – ${ld} ${lm} ${ly}`
   return `${fd}–${ld} ${lm} ${ly}`
+}
+
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+/** `'Tue 22 Sep'`. */
+export function formatDayDate(date: IsoDate): string {
+  const weekday = WEEKDAYS[(((mustParse(date) + 3) % 7) + 7) % 7]
+  return `${weekday} ${formatShortDate(date)}`
+}
+
+function clock(hour: number): string {
+  const h = hour % 12 === 0 ? 12 : hour % 12
+  return `${h}${hour < 12 || hour === HOURS_PER_DAY ? 'am' : 'pm'}`
+}
+
+/**
+ * `'Tue 22 Sep, all day'`, `'Tue 22 – Fri 25 Sep, all day'`, `'Tue 22 Sep, 9am–12pm'`, or
+ * `'Tue 22 Sep 2pm – Thu 24 Sep 11am'`.
+ */
+export function formatSpan(span: TimeSpan): string {
+  const wholeDays = span.startHour === 0 && span.endHour === HOURS_PER_DAY
+  if (span.startDate === span.endDate) {
+    return `${formatDayDate(span.startDate)}, ${wholeDays ? 'all day' : `${clock(span.startHour)}–${clock(span.endHour)}`}`
+  }
+  if (wholeDays) {
+    const [first, last] = [formatDayDate(span.startDate), formatDayDate(span.endDate)]
+    // Drop the repeated month: 'Tue 22 – Fri 25 Sep'.
+    const sameMonth = span.startDate.slice(0, 7) === span.endDate.slice(0, 7)
+    return `${sameMonth ? first.replace(/ \w+$/, '') : first} – ${last}, all day`
+  }
+  return `${formatDayDate(span.startDate)} ${clock(span.startHour)} – ${formatDayDate(span.endDate)} ${clock(span.endHour)}`
 }
 
 /**
@@ -134,22 +203,18 @@ export function resolveWeek(
     const pinned = employee.pinned ? Uint8Array.from(employee.pinned) : new Uint8Array(WEEK_HOURS)
     let anyPinned = employee.pinned !== undefined
 
-    const each = (entries: DatedHours[], mark: (slot: number) => void) => {
-      for (const entry of entries) {
-        const day = weekDayIndex(weekStart, entry.date)
-        if (day === null) continue
-        const from = Math.max(0, entry.startHour)
-        const to = Math.min(HOURS_PER_DAY, entry.endHour)
-        for (let hour = from; hour < to; hour++) mark(slotIndex(day, hour))
+    for (const span of exceptions.timeOff) {
+      const { from, to } = spanSlots(weekStart, span)
+      for (let slot = from; slot < to; slot++) availability[slot] = Availability.Unavailable
+    }
+    for (const entry of exceptions.pins) {
+      const day = weekDayIndex(weekStart, entry.date)
+      if (day === null) continue
+      for (let hour = Math.max(0, entry.startHour); hour < Math.min(HOURS_PER_DAY, entry.endHour); hour++) {
+        pinned[slotIndex(day, hour)] = 1
+        anyPinned = true
       }
     }
-    each(exceptions.timeOff, (slot) => {
-      availability[slot] = Availability.Unavailable
-    })
-    each(exceptions.pins, (slot) => {
-      pinned[slot] = 1
-      anyPinned = true
-    })
 
     return anyPinned ? { ...employee, availability, pinned } : { ...employee, availability }
   })

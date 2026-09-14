@@ -1,160 +1,157 @@
 import { useState } from 'react'
-import { isIsoDate, mondayOf, weekDayIndex } from '../../core/calendar'
+import { formatDayDate, formatSpan, isIsoDate, mondayOf, spanIsValid, weekDayIndex, type TimeSpan } from '../../core/calendar'
 import { fmtHour, fmtHourRange } from '../../core/config'
 import { HOURS_PER_DAY } from '../../core/types'
 import {
-  addException,
+  addTimeOff,
   entryTiming,
-  formatEntryDate,
-  removeException,
-  type ExceptionKind,
+  removePin,
+  removeTimeOff,
   type Project,
   type ProjectEmployee,
   type ProjectUpdate,
 } from '../project'
 
 const HOURS = Array.from({ length: HOURS_PER_DAY + 1 }, (_, h) => h)
-
-const COPY: Record<ExceptionKind, { title: string; hint: string; empty: string; add: string }> = {
-  timeOff: {
-    title: 'Time off',
-    hint: 'Overrides availability for that date only.',
-    empty: 'No time off.',
-    add: 'Add time off',
-  },
-  pins: {
-    title: 'Pinned shifts',
-    hint: 'They will work at least these hours. The solver may extend the shift.',
-    empty: 'No pinned shifts.',
-    add: 'Pin shift',
-  },
-}
-
 const TIMING_LABEL = { past: 'past week', later: 'later week', thisWeek: null } as const
 
-/** Dated time off and pins for one employee: an add form and a list, per kind. */
-export function ExceptionsEditor({ project, employee, update }: { project: Project; employee: ProjectEmployee; update: ProjectUpdate }) {
+interface EditorProps {
+  project: Project
+  employee: ProjectEmployee
+  update: ProjectUpdate
+}
+
+/** Time off, entered as a start and an end; and the pins painted on the grid, listed for removal. */
+export function ExceptionsEditor(props: EditorProps) {
   return (
     <div className="exceptions">
-      <ExceptionList kind="timeOff" project={project} employee={employee} update={update} />
-      <ExceptionList kind="pins" project={project} employee={employee} update={update} />
+      <TimeOffEditor {...props} />
+      <PinList {...props} />
     </div>
   )
 }
 
-function ExceptionList({
-  kind,
-  project,
-  employee,
-  update,
-}: {
-  kind: ExceptionKind
-  project: Project
-  employee: ProjectEmployee
-  update: ProjectUpdate
-}) {
-  const copy = COPY[kind]
-
-  // New entries default to the scheduled week, and to the chosen day's opening hours when it has some.
-  const openingFor = (value: string) => {
-    const day = isIsoDate(value) ? weekDayIndex(mondayOf(value), value) : null
+function TimeOffEditor({ project, employee, update }: EditorProps) {
+  // New time off defaults to the scheduled week's Monday, and to that day's opening hours.
+  const opening = (date: string) => {
+    const day = isIsoDate(date) ? weekDayIndex(mondayOf(date), date) : null
     return day === null ? null : project.operatingHours[day]
   }
 
-  const [date, setDate] = useState(project.weekStart)
-  const [allDay, setAllDay] = useState(kind === 'timeOff')
-  const [startHour, setStartHour] = useState(() => openingFor(project.weekStart)?.startHour ?? 9)
-  const [endHour, setEndHour] = useState(() => openingFor(project.weekStart)?.endHour ?? 17)
+  const [startDate, setStartDate] = useState(project.weekStart)
+  const [endDate, setEndDate] = useState(project.weekStart)
+  const [allDay, setAllDay] = useState(true)
+  const [startHour, setStartHour] = useState(() => opening(project.weekStart)?.startHour ?? 9)
+  const [endHour, setEndHour] = useState(() => opening(project.weekStart)?.endHour ?? 17)
 
-  const whole = kind === 'timeOff' && allDay
-  const range = whole ? { startHour: 0, endHour: HOURS_PER_DAY } : { startHour, endHour }
-  const valid = isIsoDate(date) && range.startHour < range.endHour
+  const span: TimeSpan = allDay
+    ? { startDate, startHour: 0, endDate, endHour: HOURS_PER_DAY }
+    : { startDate, startHour, endDate, endHour }
+  const datesOk = isIsoDate(startDate) && isIsoDate(endDate)
+  const valid = datesOk && spanIsValid(span)
 
-  const add = () => {
-    if (!valid) return
-    update((p) => addException(p, employee.id, kind, { date, ...range }))
-  }
+  const hourSelect = (label: string, value: number, onChange: (h: number) => void, options: number[]) => (
+    <select aria-label={label} value={value} onChange={(e) => onChange(Number(e.target.value))}>
+      {options.map((h) => (
+        <option key={h} value={h}>{h === HOURS_PER_DAY ? 'midnight' : fmtHour(h)}</option>
+      ))}
+    </select>
+  )
 
   return (
     <div className="stack exception-list">
       <div>
-        <h4>{copy.title}</h4>
-        <p className="hint">{copy.hint}</p>
+        <h4>Time off</h4>
+        <p className="hint">Can run across several days. Overrides availability for that time only.</p>
       </div>
 
-      <div className="row exception-form">
-        <label className="field">
-          <span>Date</span>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => {
-              setDate(e.target.value)
-              const win = openingFor(e.target.value)
-              if (win) {
-                setStartHour(win.startHour)
-                setEndHour(win.endHour)
-              }
-            }}
-          />
+      <div className="span-form">
+        <span className="span-label">From</span>
+        <input
+          type="date"
+          aria-label="Time off starts"
+          value={startDate}
+          onChange={(e) => {
+            const date = e.target.value
+            setStartDate(date)
+            // Keep the end from falling before the start.
+            if (isIsoDate(date) && (!isIsoDate(endDate) || endDate < date)) setEndDate(date)
+            const win = opening(date)
+            if (win) setStartHour(win.startHour)
+          }}
+        />
+        {allDay ? <span /> : hourSelect('Time off starts at', startHour, setStartHour, HOURS.slice(0, HOURS_PER_DAY))}
+
+        <span className="span-label">To</span>
+        <input type="date" aria-label="Time off ends" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+        {allDay ? <span /> : hourSelect('Time off ends at', endHour, setEndHour, HOURS.slice(1))}
+      </div>
+
+      <div className="row">
+        <label className="check">
+          <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
+          All day
         </label>
-        {kind === 'timeOff' && (
-          <label className="check">
-            <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
-            All day
-          </label>
-        )}
-        {!whole && (
-          <>
-            <label className="field">
-              <span>From</span>
-              <select value={startHour} onChange={(e) => setStartHour(Number(e.target.value))}>
-                {HOURS.slice(0, HOURS_PER_DAY).map((h) => (
-                  <option key={h} value={h}>{fmtHour(h)}</option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Until</span>
-              <select value={endHour} onChange={(e) => setEndHour(Number(e.target.value))}>
-                {HOURS.slice(1).map((h) => (
-                  <option key={h} value={h}>{h === HOURS_PER_DAY ? 'midnight' : fmtHour(h)}</option>
-                ))}
-              </select>
-            </label>
-          </>
-        )}
-        <button type="button" className="btn" disabled={!valid} onClick={add}>{copy.add}</button>
+        <span className="spacer" />
+        <button type="button" className="btn" disabled={!valid} onClick={() => update((p) => addTimeOff(p, employee.id, span))}>
+          Add time off
+        </button>
       </div>
-      {isIsoDate(date) && !valid && <p className="hint">The end must be after the start.</p>}
+      {datesOk && !valid && <p className="hint">The end must be after the start.</p>}
+      {valid && <p className="hint">{formatSpan(span)}</p>}
 
-      {employee[kind].length === 0 ? (
-        <p className="hint">{copy.empty}</p>
+      {employee.timeOff.length === 0 ? (
+        <p className="hint">No time off.</p>
       ) : (
         <ul className="entry-list">
-          {employee[kind].map((entry) => {
-            const timing = TIMING_LABEL[entryTiming(project, entry)]
-            const hours = entry.startHour === 0 && entry.endHour === HOURS_PER_DAY ? 'all day' : fmtHourRange(entry.startHour, entry.endHour)
-            return (
-              <li key={entry.id} className={`entry${timing ? ' is-elsewhere' : ''}`}>
-                <span>
-                  {formatEntryDate(entry.date)}, {hours}
-                </span>
-                {timing && <span className="tag">{timing}</span>}
-                <span className="spacer" />
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  aria-label={`Remove ${copy.title.toLowerCase()} ${formatEntryDate(entry.date)}, ${hours}`}
-                  onClick={() => update((p) => removeException(p, employee.id, kind, entry.id))}
-                >
-                  Remove
-                </button>
-              </li>
-            )
-          })}
+          {employee.timeOff.map((entry) => (
+            <Entry
+              key={entry.id}
+              label={formatSpan(entry)}
+              timing={TIMING_LABEL[entryTiming(project, entry)]}
+              onRemove={() => update((p) => removeTimeOff(p, employee.id, entry.id))}
+            />
+          ))}
         </ul>
       )}
     </div>
+  )
+}
+
+function PinList({ project, employee, update }: EditorProps) {
+  return (
+    <div className="stack exception-list">
+      <div>
+        <h4>Pinned shifts</h4>
+        <p className="hint">Paint these on the grid with the Pin brush. They will work at least these hours.</p>
+      </div>
+      {employee.pins.length === 0 ? (
+        <p className="hint">No pinned shifts.</p>
+      ) : (
+        <ul className="entry-list">
+          {employee.pins.map((pin) => (
+            <Entry
+              key={pin.id}
+              label={`${formatDayDate(pin.date)}, ${fmtHourRange(pin.startHour, pin.endHour)}`}
+              timing={TIMING_LABEL[entryTiming(project, pin)]}
+              onRemove={() => update((p) => removePin(p, employee.id, pin.id))}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function Entry({ label, timing, onRemove }: { label: string; timing: string | null; onRemove: () => void }) {
+  return (
+    <li className={`entry${timing ? ' is-elsewhere' : ''}`}>
+      <span>{label}</span>
+      {timing && <span className="tag">{timing}</span>}
+      <span className="spacer" />
+      <button type="button" className="btn btn-small" aria-label={`Remove ${label}`} onClick={onRemove}>
+        Remove
+      </button>
+    </li>
   )
 }

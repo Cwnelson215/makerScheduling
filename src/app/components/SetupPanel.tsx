@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { addDays, formatWeekRange, todayIso } from '../../core/calendar'
 import { fmtHour } from '../../core/config'
 import { DAY_NAMES } from '../../core/types'
 import {
@@ -7,7 +6,6 @@ import {
   openSlots,
   paintGrid,
   setOperatingWindow,
-  setWeekStart,
   visibleHours,
   weekDayLabels,
   type Project,
@@ -16,6 +14,7 @@ import {
 } from '../project'
 import { NumberField } from './NumberField'
 import { WeekGrid } from './WeekGrid'
+import { WeekPicker } from './WeekPicker'
 
 const HOUR_OPTIONS = Array.from({ length: 25 }, (_, h) => h)
 const BRUSHES = [0, 1, 2, 3, 4, 5]
@@ -34,30 +33,7 @@ export function SetupPanel({ project, update }: { project: Project; update: Proj
           <h2>Week</h2>
           <p className="hint">The week you're building a schedule for. Time off and pinned shifts on these dates apply.</p>
         </div>
-        <div className="row">
-          <button type="button" className="btn" aria-label="Previous week" onClick={() => update((p) => setWeekStart(p, addDays(p.weekStart, -7)))}>
-            ‹
-          </button>
-          <label className="field">
-            <span>Week starting</span>
-            <input
-              type="date"
-              value={project.weekStart}
-              onChange={(e) => {
-                const date = e.target.value
-                update((p) => setWeekStart(p, date))
-              }}
-            />
-          </label>
-          <button type="button" className="btn" aria-label="Next week" onClick={() => update((p) => setWeekStart(p, addDays(p.weekStart, 7)))}>
-            ›
-          </button>
-          <strong>{formatWeekRange(project.weekStart)}</strong>
-          <span className="spacer" />
-          <button type="button" className="btn" onClick={() => update((p) => setWeekStart(p, todayIso()))}>
-            This week
-          </button>
-        </div>
+        <WeekPicker project={project} update={update} />
       </section>
 
       <section className="panel stack">
