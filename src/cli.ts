@@ -4,6 +4,7 @@ import { ConfigError } from './core/config'
 import { parseScenario, ScenarioError, type ScenarioJson } from './core/io'
 import { PatternExplosionError } from './core/patterns'
 import { formatReport, formatSchedule } from './core/report'
+import { buildRules } from './core/rules/catalog'
 import { RuleDefinitionError } from './core/rules/registry'
 import { calibrate, solve } from './core/search/solver'
 
@@ -68,6 +69,7 @@ function main(): void {
     : scenario.threshold
 
   const budget = {
+    rules: buildRules(scenario.rules),
     maxNodes: numeric(flags, 'max-nodes', 5_000_000),
     maxMillis: numeric(flags, 'max-ms', 30_000),
   }

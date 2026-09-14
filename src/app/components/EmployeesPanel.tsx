@@ -1,0 +1,179 @@
+import { useState } from 'react'
+import { fmtHour } from '../../core/config'
+import { Availability, DAY_NAMES, WEEK_HOURS } from '../../core/types'
+import {
+  isOpen,
+  newEmployee,
+  newId,
+  openSlots,
+  paintGrid,
+  updateEmployee,
+  visibleHours,
+  type Project,
+  type ProjectUpdate,
+} from '../project'
+import { NumberField } from './NumberField'
+import { WeekGrid } from './WeekGrid'
+
+const LEVELS: { value: Availability; label: string }[] = [
+  { value: Availability.Preferred, label: 'Preferred' },
+  { value: Availability.NotPreferred, label: 'Not preferred' },
+  { value: Availability.Unavailable, label: 'Unavailable' },
+]
+
+const levelName = (value: number) => LEVELS.find((l) => l.value === value)?.label ?? 'Unavailable'
+
+export function EmployeesPanel({ project, update }: { project: Project; update: ProjectUpdate }) {
+  const [selectedId, setSelectedId] = useState<string | null>(project.employees[0]?.id ?? null)
+  const [brush, setBrush] = useState<Availability>(Availability.Preferred)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+
+  const selected = project.employees.find((e) => e.id === selectedId) ?? project.employees[0] ?? null
+
+  const select = (id: string) => {
+    setSelectedId(id)
+    setConfirmingDelete(false)
+  }
+
+  const add = () => {
+    const employee = newEmployee(project)
+    update((p) => ({ ...p, employees: [...p.employees, employee] }))
+    select(employee.id)
+  }
+
+  const duplicate = () => {
+    if (!selected) return
+    const copy = { ...selected, id: newId(), name: `${selected.name} (copy)`, availability: selected.availability.slice() }
+    update((p) => ({ ...p, employees: [...p.employees, copy] }))
+    select(copy.id)
+  }
+
+  const remove = () => {
+    if (!selected) return
+    const index = project.employees.findIndex((e) => e.id === selected.id)
+    const next = project.employees[index + 1] ?? project.employees[index - 1] ?? null
+    update((p) => ({ ...p, employees: p.employees.filter((e) => e.id !== selected.id) }))
+    setSelectedId(next?.id ?? null)
+    setConfirmingDelete(false)
+  }
+
+  return (
+    <div className="split">
+      <aside className="panel stack">
+        <div className="row">
+          <h2>Employees</h2>
+          <span className="spacer" />
+          <button type="button" className="btn btn-primary" onClick={add}>Add</button>
+        </div>
+        {project.employees.length === 0 ? (
+          <p className="hint">No employees yet.</p>
+        ) : (
+          <ul className="employee-list">
+            {project.employees.map((e) => (
+              <li key={e.id}>
+                <button type="button" className="employee-item" aria-current={e.id === selected?.id} onClick={() => select(e.id)}>
+                  <span>{e.name || 'Unnamed'}</span>
+                  <span className="muted">{e.targetWeeklyHours}/{e.maxWeeklyHours}h</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </aside>
+
+      {selected ? (
+        <section className="panel stack">
+          <div className="row">
+            <label className="field" style={{ flex: '1 1 14rem' }}>
+              <span>Name</span>
+              <input type="text" value={selected.name} onChange={(e) => update((p) => updateEmployee(p, selected.id, { name: e.target.value }))} />
+            </label>
+            <NumberField label="Target hours / week" value={selected.targetWeeklyHours} min={0} max={168} onChange={(v) => update((p) => updateEmployee(p, selected.id, { targetWeeklyHours: v }))} />
+            <NumberField label="Max hours / week" value={selected.maxWeeklyHours} min={0} max={168} onChange={(v) => update((p) => updateEmployee(p, selected.id, { maxWeeklyHours: v }))} />
+          </div>
+
+          <div className="row">
+            <button type="button" className="btn" onClick={duplicate}>Duplicate</button>
+            {confirmingDelete ? (
+              <>
+                <button type="button" className="btn btn-danger" onClick={remove}>Confirm delete {selected.name}</button>
+                <button type="button" className="btn" onClick={() => setConfirmingDelete(false)}>Keep</button>
+              </>
+            ) : (
+              <button type="button" className="btn btn-danger" onClick={() => setConfirmingDelete(true)}>Delete</button>
+            )}
+          </div>
+
+          <div>
+            <h3>Availability</h3>
+            <p className="hint">Pick a level, then click or drag across the week. Hours outside operating hours are faded; they never get scheduled.</p>
+          </div>
+
+          <div className="row">
+            {LEVELS.map((level) => (
+              <button key={level.value} type="button" className="btn" aria-pressed={brush === level.value} onClick={() => setBrush(level.value)}>
+                <span className={`swatch avail-${level.value}`} style={{ marginRight: '0.4rem', verticalAlign: '-0.15rem' }} />
+                {level.label}
+              </button>
+            ))}
+            <span className="spacer" />
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                update((p) => {
+                  const current = p.employees.find((e) => e.id === selected.id)!
+                  return updateEmployee(p, selected.id, { availability: paintGrid(current.availability, openSlots(p), brush) })
+                })
+              }
+            >
+              Set all open hours to {levelName(brush).toLowerCase()}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                update((p) =>
+                  updateEmployee(p, selected.id, { availability: new Array<number>(WEEK_HOURS).fill(Availability.Unavailable) }),
+                )
+              }
+            >
+              Clear
+            </button>
+          </div>
+
+          <WeekGrid
+            label={`${selected.name} availability`}
+            hours={visibleHours(project)}
+            onPaint={(slot) =>
+              update((p) => {
+                const current = p.employees.find((e) => e.id === selected.id)
+                return current ? updateEmployee(p, selected.id, { availability: paintGrid(current.availability, [slot], brush) }) : p
+              })
+            }
+            describe={(slot, day, hour) => {
+              const value = selected.availability[slot]
+              const open = isOpen(project, day, hour)
+              return {
+                className: `avail-${value}${open ? '' : ' avail-outside'}`,
+                title: `${DAY_NAMES[day]} ${fmtHour(hour)}: ${levelName(value)}${open ? '' : ' (closed)'}`,
+              }
+            }}
+          />
+
+          <div className="legend">
+            {LEVELS.map((level) => (
+              <span key={level.value} className="legend-item">
+                <span className={`swatch avail-${level.value}`} /> {level.label}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="panel">
+          <p className="hint">Add an employee to set their hours and availability.</p>
+        </section>
+      )}
+    </div>
+  )
+}

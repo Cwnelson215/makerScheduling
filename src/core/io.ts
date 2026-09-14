@@ -1,4 +1,5 @@
 import { DEFAULT_CONFIG } from './config'
+import { normaliseRuleSettings, type RuleSetting } from './rules/catalog'
 import {
   Availability,
   DAY_NAMES,
@@ -26,6 +27,8 @@ export type PerDay<T> = Partial<Record<DayName, T>>
 export interface ScenarioJson {
   name?: string
   threshold?: number
+  /** Rule weights. Omitted rules take their catalog defaults. */
+  rules?: Partial<RuleSetting>[]
   config: {
     /** Day → `[open, close]`. Days omitted (or `null`) are closed. */
     operatingHours: PerDay<HourRange | null>
@@ -80,12 +83,15 @@ function checkRange([start, end]: HourRange, where: string): void {
   }
 }
 
-export function parseScenario(json: ScenarioJson): {
+export interface Scenario {
   name: string
   employees: Employee[]
   config: ScheduleConfig
   threshold: number
-} {
+  rules: RuleSetting[]
+}
+
+export function parseScenario(json: ScenarioJson): Scenario {
   const operatingHours: (OperatingWindow | null)[] = new Array(DAYS_PER_WEEK).fill(null)
   for (const [key, range] of Object.entries(json.config.operatingHours)) {
     const day = dayIndex(key, 'config.operatingHours')
@@ -159,5 +165,87 @@ export function parseScenario(json: ScenarioJson): {
     employees,
     config,
     threshold: json.threshold ?? 0,
+    rules: normaliseRuleSettings(json.rules),
+  }
+}
+
+/** Contiguous `[start, end)` runs within `[from, to)` where `matches(hour)` holds. */
+function runs(from: number, to: number, matches: (hour: number) => boolean): HourRange[] {
+  const out: HourRange[] = []
+  let start = -1
+  for (let hour = from; hour <= to; hour++) {
+    const hit = hour < to && matches(hour)
+    if (hit && start < 0) start = hour
+    if (!hit && start >= 0) {
+      out.push([start, hour])
+      start = -1
+    }
+  }
+  return out
+}
+
+/**
+ * Inverse of {@link parseScenario}: compresses 168-entry grids back into hand-readable hour
+ * ranges. `parseScenario(serializeScenario(s))` reproduces `s` exactly.
+ */
+export function serializeScenario(scenario: Scenario): ScenarioJson {
+  const { config } = scenario
+
+  const operatingHours: PerDay<HourRange | null> = {}
+  const minCoverage: PerDay<CoverageRange[]> = {}
+  for (let day = 0; day < DAYS_PER_WEEK; day++) {
+    const win = config.operatingHours[day]
+    if (win) operatingHours[DAY_NAMES[day]] = [win.startHour, win.endHour]
+
+    const ranges: CoverageRange[] = []
+    let start = -1
+    for (let hour = 0; hour <= HOURS_PER_DAY; hour++) {
+      const need = hour < HOURS_PER_DAY ? config.minCoverage[slotIndex(day, hour)] : 0
+      const current = start >= 0 ? config.minCoverage[slotIndex(day, start)] : 0
+      if (start >= 0 && need !== current) {
+        ranges.push([start, hour, current])
+        start = -1
+      }
+      if (start < 0 && need > 0) start = hour
+    }
+    if (ranges.length > 0) minCoverage[DAY_NAMES[day]] = ranges
+  }
+
+  const employees = scenario.employees.map((employee) => {
+    const preferred: PerDay<HourRange[]> = {}
+    const notPreferred: PerDay<HourRange[]> = {}
+    for (let day = 0; day < DAYS_PER_WEEK; day++) {
+      const level = (hour: number) => employee.availability[slotIndex(day, hour)]
+      const p = runs(0, HOURS_PER_DAY, (h) => level(h) === Availability.Preferred)
+      const n = runs(0, HOURS_PER_DAY, (h) => level(h) === Availability.NotPreferred)
+      if (p.length > 0) preferred[DAY_NAMES[day]] = p
+      if (n.length > 0) notPreferred[DAY_NAMES[day]] = n
+    }
+    return {
+      id: employee.id,
+      name: employee.name,
+      maxWeeklyHours: employee.maxWeeklyHours,
+      targetWeeklyHours: employee.targetWeeklyHours,
+      preferred,
+      notPreferred,
+    }
+  })
+
+  return {
+    name: scenario.name,
+    threshold: scenario.threshold,
+    rules: scenario.rules,
+    config: {
+      operatingHours,
+      minCoverage,
+      minShiftLength: config.minShiftLength,
+      maxShiftLength: config.maxShiftLength,
+      maxDailyHours: config.maxDailyHours,
+      allowSplitShifts: config.allowSplitShifts,
+      minGapBetweenBlocks: config.minGapBetweenBlocks,
+      maxBlocksPerDay: config.maxBlocksPerDay,
+      maxConsecutiveDays: config.maxConsecutiveDays,
+    },
+    employees,
   }
 }

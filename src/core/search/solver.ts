@@ -45,6 +45,23 @@ export interface SolveOptions {
   /** Slot decision order. See {@link buildSlotOrder}. Default `'day-major'`. */
   ordering?: SlotOrdering
   signal?: AbortSignal
+  /**
+   * Called periodically while the search runs. The search is synchronous, so this is the only
+   * way a caller (e.g. a Web Worker relaying to a UI) can observe it before it returns.
+   */
+  onProgress?: (progress: SearchProgress) => void
+  /** Minimum ms between `onProgress` calls. Default 250. */
+  progressIntervalMs?: number
+}
+
+export interface SearchProgress {
+  nodesExplored: number
+  schedulesFound: number
+  /** Best score found so far, or `null` before the first qualifying schedule. */
+  bestScore: number | null
+  maxDepthReached: number
+  slotCount: number
+  elapsedMs: number
 }
 
 export interface SolveResult {
@@ -79,6 +96,8 @@ export function solve(
     assertBoundsExact = false,
     ordering = 'day-major',
     signal,
+    onProgress,
+    progressIntervalMs = 250,
   } = options
 
   validateProblem(employees, config)
@@ -105,10 +124,24 @@ export function solve(
   let prunedByScore = 0
   let prunedByHours = 0
   let schedulesFound = 0
+  let bestScore: number | null = null
   let stopReason: StopReason = 'exhausted'
   let stopped = false
 
   const startedAt = Date.now()
+  let lastProgressAt = startedAt
+
+  const reportProgress = (now: number): void => {
+    lastProgressAt = now
+    onProgress!({
+      nodesExplored,
+      schedulesFound,
+      bestScore,
+      maxDepthReached,
+      slotCount: order.length,
+      elapsedMs: now - startedAt,
+    })
+  }
 
   const effectiveThreshold = (): number =>
     tightenToBest ? Math.max(threshold, nextAbove(results.worstKeptScore)) : threshold
@@ -118,9 +151,13 @@ export function solve(
       stopReason = 'nodeBudget'
       return true
     }
-    if (nodesExplored % TIME_CHECK_INTERVAL === 0 && Date.now() - startedAt >= maxMillis) {
-      stopReason = 'timeBudget'
-      return true
+    if (nodesExplored % TIME_CHECK_INTERVAL === 0) {
+      const now = Date.now()
+      if (now - startedAt >= maxMillis) {
+        stopReason = 'timeBudget'
+        return true
+      }
+      if (onProgress && now - lastProgressAt >= progressIntervalMs) reportProgress(now)
     }
     if (signal?.aborted) {
       stopReason = 'aborted'
@@ -144,6 +181,7 @@ export function solve(
 
     if (score < threshold) return
     schedulesFound++
+    if (bestScore === null || score > bestScore) bestScore = score
     results.offer(materialiseSchedule(state.patternAt, score, penalties, ctx))
   }
 
@@ -192,6 +230,7 @@ export function solve(
   }
 
   descend()
+  if (onProgress) reportProgress(Date.now())
 
   let patternCount = 0
   for (const list of ctx.patterns) patternCount += list.length

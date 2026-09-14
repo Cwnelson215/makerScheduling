@@ -4,14 +4,34 @@ Builds work shift schedules by searching the space of valid rosters, scoring eac
 admin-defined rules, and keeping only those above a threshold — abandoning any branch that
 provably cannot reach it.
 
-**Status:** solver core, data model, and test suite. No UI yet (the Vite/React scaffold is in
-place for it).
+**Status:** solver core, test suite, and a browser UI for editing a roster and building
+schedules.
 
 ```bash
 npm install
+npm run dev        # the app, at http://localhost:5173
 npm test
-npm run solve -- src/fixtures/small-cafe.json
+npm run solve -- src/fixtures/small-cafe.json   # the same solver from the command line
 ```
+
+## Using the app
+
+1. **Setup** — opening hours per day, shift-length limits, split shifts, and the minimum
+   headcount for each hour (pick a number, then drag across the grid).
+2. **Employees** — add people, set target and maximum weekly hours, and paint availability as
+   preferred, not preferred, or unavailable.
+3. **Scoring** — turn rules on or off and set how many points each one costs.
+4. **Solve** — **Find achievable score** measures the best score this roster can reach and
+   offers a threshold; **Build schedules** then searches, with live progress. Results show each
+   schedule's shifts, where its points went, and staffing by hour. The report says plainly
+   whether the search finished or stopped at the time limit.
+
+Everything autosaves in the browser (`localStorage`). **Export** writes the same scenario
+format the CLI reads, and **Import** accepts either that or an exported project.
+
+The solver runs in a Web Worker, so the page stays responsive during a long search. **Stop**
+terminates the worker, and whatever that run had found is discarded: a synchronous search can't
+be asked to stop politely. To end early and keep results, lower the time limit instead.
 
 ---
 
@@ -178,7 +198,7 @@ Scenario files use hour ranges rather than 168-entry grids. Anything not listed 
 
 ## Verification
 
-`npm test` — 104 tests. Three carry the correctness argument:
+`npm test` — 124 tests. Three carry the correctness argument:
 
 **`tests/solver.exhaustive.test.ts` — brute force vs. branch-and-bound.** On a fixture sized so
 full enumeration is feasible, the answer is computed twice: once by naive exhaustion with no
@@ -210,16 +230,27 @@ src/core/types.ts              model and constants
 src/core/config.ts             defaults, validation of impossible rosters
 src/core/patterns.ts           legal day-pattern enumeration, problem context
 src/core/state.ts              incremental search state (apply / undo)
-src/core/rules/                Rule interface, built-ins, compilation
+src/core/rules/                Rule interface, built-ins, compilation, serializable catalog
 src/core/search/ordering.ts    slot order + coverage-aware candidate ranking
 src/core/search/solver.ts      branch-and-bound, budgets, calibration
 src/core/report.ts             top-K heap, search report, formatting
-src/core/io.ts                 scenario file parsing
+src/core/io.ts                 scenario file parsing and serialization
 src/cli.ts                     dev harness
+src/app/project.ts             editor model: plain-data project, edits, persistence
+src/app/useSolver.ts           owns the solver worker (progress, cancel, results)
+src/app/components/            Setup, Employees, Scoring, Solve screens; paintable week grid
+src/worker/                    worker entry, message protocol, request handler
 ```
 
 ## Not built yet
 
-React UI (availability grid editor, coverage setup, rule builder, results view), employee CRUD,
-persistence, export. The `Rule` interface is shaped so bounded reward-style rules can be added
-later without reworking the engine.
+- **Roles and skills.** Coverage is a plain headcount per hour; anyone available counts.
+- **Date-specific exceptions** (time off in a particular week) and **pinned assignments**.
+- **Constraint propagation** in the solver, which would let large rosters finish instead of
+  hitting the time limit.
+- **Schedule export** (CSV, calendar, printable week). Export currently saves the project, not a
+  chosen schedule.
+- **Keyboard painting** of the week grids; availability and coverage are mouse and touch only.
+
+The `Rule` interface is shaped so bounded reward-style rules can be added later without
+reworking the engine.
