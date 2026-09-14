@@ -11,6 +11,7 @@ import {
   type ProjectEmployee,
   type ProjectUpdate,
 } from '../project'
+import { Icon } from './ui/Icon'
 
 const HOURS = Array.from({ length: HOURS_PER_DAY + 1 }, (_, h) => h)
 const TIMING_LABEL = { past: 'past week', later: 'later week', thisWeek: null } as const
@@ -59,9 +60,9 @@ function TimeOffEditor({ project, employee, update }: EditorProps) {
   )
 
   return (
-    <div className="stack exception-list">
+    <div className="stack-sm">
       <div>
-        <h4>Time off</h4>
+        <h3 className="section-label">Time off</h3>
         <p className="hint">Can run across several days. Overrides availability for that time only.</p>
       </div>
 
@@ -88,20 +89,20 @@ function TimeOffEditor({ project, employee, update }: EditorProps) {
       </div>
 
       <div className="row">
-        <label className="check">
-          <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
-          All day
+        <label className="toggle">
+          <input type="checkbox" role="switch" className="switch" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
+          <span className="toggle-label">All day</span>
         </label>
         <span className="spacer" />
-        <button type="button" className="btn" disabled={!valid} onClick={() => update((p) => addTimeOff(p, employee.id, span))}>
-          Add time off
+        <button type="button" className="btn btn--sm" disabled={!valid} onClick={() => update((p) => addTimeOff(p, employee.id, span))}>
+          <Icon name="plus" size={14} /> Add time off
         </button>
       </div>
-      {datesOk && !valid && <p className="hint">The end must be after the start.</p>}
+      {datesOk && !valid && <p className="field-error">The end must be after the start.</p>}
       {valid && <p className="hint">{formatSpan(span)}</p>}
 
       {employee.timeOff.length === 0 ? (
-        <p className="hint">No time off.</p>
+        <p className="empty">No time off.</p>
       ) : (
         <ul className="entry-list">
           {employee.timeOff.map((entry) => (
@@ -120,13 +121,13 @@ function TimeOffEditor({ project, employee, update }: EditorProps) {
 
 function PinList({ project, employee, update }: EditorProps) {
   return (
-    <div className="stack exception-list">
+    <div className="stack-sm">
       <div>
-        <h4>Pinned shifts</h4>
-        <p className="hint">Paint these on the grid with the Pin brush. They will work at least these hours.</p>
+        <h3 className="section-label">Pinned shifts</h3>
+        <p className="hint">Painted with the Pin brush. They'll work at least these hours.</p>
       </div>
       {employee.pins.length === 0 ? (
-        <p className="hint">No pinned shifts.</p>
+        <p className="empty">No pinned shifts.</p>
       ) : (
         <ul className="entry-list">
           {employee.pins.map((pin) => (
@@ -146,11 +147,11 @@ function PinList({ project, employee, update }: EditorProps) {
 function Entry({ label, timing, onRemove }: { label: string; timing: string | null; onRemove: () => void }) {
   return (
     <li className={`entry${timing ? ' is-elsewhere' : ''}`}>
-      <span>{label}</span>
-      {timing && <span className="tag">{timing}</span>}
+      <span className="entry-label">{label}</span>
+      {timing && <span className="pill">{timing}</span>}
       <span className="spacer" />
-      <button type="button" className="btn btn-small" aria-label={`Remove ${label}`} onClick={onRemove}>
-        Remove
+      <button type="button" className="btn btn--ghost btn--icon btn--sm" aria-label={`Remove ${label}`} title="Remove" onClick={onRemove}>
+        <Icon name="x" size={14} />
       </button>
     </li>
   )

@@ -29,7 +29,8 @@ npm run solve -- src/fixtures/small-cafe.json   # the same solver from the comma
    schedule's shifts, where its points went, and staffing by hour. The report says plainly
    whether the search finished or stopped at the time limit.
 
-Everything autosaves in the browser (`localStorage`). **Export** writes the same scenario
+Everything autosaves in the browser (`localStorage`). The **Project** menu in the top bar
+starts a new project, loads an example, and handles files: **Export** writes the same scenario
 format the CLI reads, and **Import** accepts either that or an exported project.
 
 The solver runs in a Web Worker, so the page stays responsive during a long search. **Stop**

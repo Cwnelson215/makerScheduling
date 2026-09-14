@@ -3,6 +3,10 @@ import { EmployeesPanel } from './app/components/EmployeesPanel'
 import { ScoringPanel } from './app/components/ScoringPanel'
 import { SetupPanel } from './app/components/SetupPanel'
 import { SolvePanel } from './app/components/SolvePanel'
+import { Callout } from './app/components/ui/Callout'
+import { ConfirmDialog } from './app/components/ui/ConfirmDialog'
+import { Icon, LogoMark, type IconName } from './app/components/ui/Icon'
+import { Menu } from './app/components/ui/Menu'
 import {
   loadProject,
   normaliseProject,
@@ -97,86 +101,107 @@ export function App() {
     }
   }
 
-  const tabs: { id: Tab; label: string; badge?: number }[] = [
-    { id: 'setup', label: 'Setup' },
-    { id: 'employees', label: `Employees (${project.employees.length})` },
-    { id: 'scoring', label: 'Scoring' },
-    { id: 'solve', label: 'Solve', badge: problems.length || undefined },
+  const tabs: { id: Tab; label: string; icon: IconName; count?: number; problems?: number }[] = [
+    { id: 'setup', label: 'Setup', icon: 'calendar' },
+    { id: 'employees', label: 'Employees', icon: 'users', count: project.employees.length },
+    { id: 'scoring', label: 'Scoring', icon: 'sliders' },
+    { id: 'solve', label: 'Solve', icon: 'play', problems: problems.length || undefined },
   ]
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <span className="app-title">Schedule Maker</span>
-        <input
-          type="text"
-          className="project-name"
-          aria-label="Project name"
-          value={project.name}
-          onChange={(e) => {
-            const name = e.target.value
-            update((p) => ({ ...p, name }))
-          }}
-        />
-        <div className="header-actions">
-          <select
-            aria-label="Load an example"
-            value=""
-            onChange={(e) => {
-              const example = EXAMPLES[e.target.value]
-              if (example) setPending({ label: `the ${example.label} example`, make: () => projectFromScenario(parseScenario(example.json)) })
-            }}
-          >
-            <option value="">Load example…</option>
-            {Object.entries(EXAMPLES).map(([id, ex]) => (
-              <option key={id} value={id}>{ex.label}</option>
+    <>
+      <header className="topbar">
+        <div className="topbar-inner">
+          <div className="topbar-row">
+            <div className="brand">
+              <span className="brand-mark"><LogoMark /></span>
+              <span className="brand-name">Schedule Maker</span>
+            </div>
+            <span className="crumb-sep" aria-hidden="true">/</span>
+            <input
+              type="text"
+              className="project-name"
+              aria-label="Project name"
+              value={project.name}
+              onChange={(e) => {
+                const name = e.target.value
+                update((p) => ({ ...p, name }))
+              }}
+            />
+            <span className="spacer" />
+            {saveFailed ? (
+              <span className="pill pill--warning" title="This browser isn't saving changes (storage is blocked). Export your project to keep it.">
+                <Icon name="alert" size={12} /> Not saving · export to keep
+              </span>
+            ) : (
+              <span className="save-status save-status--ok" title="Changes are saved in this browser automatically">
+                <Icon name="check" size={12} /> Saved
+              </span>
+            )}
+            <Menu
+              label="Project"
+              trigger={<>Project <Icon name="chevronDown" size={14} /></>}
+              triggerClassName="btn btn--sm"
+              entries={[
+                { label: 'New project', icon: 'filePlus', onSelect: () => setPending({ label: 'a blank project', make: () => projectFromScenario(parseScenario(BLANK)) }) },
+                { label: 'Import…', icon: 'upload', onSelect: () => fileInput.current?.click() },
+                { label: 'Export', icon: 'download', onSelect: exportScenario },
+                'separator',
+                { heading: 'Load an example' },
+                ...Object.values(EXAMPLES).map((example) => ({
+                  label: example.label,
+                  icon: 'sparkle' as const,
+                  onSelect: () => setPending({ label: `the ${example.label} example`, make: () => projectFromScenario(parseScenario(example.json)) }),
+                })),
+              ]}
+            />
+            <input ref={fileInput} type="file" accept="application/json,.json" hidden onChange={importFile} />
+          </div>
+
+          <nav className="tabs" role="tablist" aria-label="Sections">
+            {tabs.map((t) => (
+              <button key={t.id} type="button" role="tab" className="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>
+                <Icon name={t.icon} size={15} />
+                {t.label}
+                {t.count !== undefined && <span className="pill">{t.count}</span>}
+                {t.problems && <span className="pill pill--critical" aria-label={`${t.problems} problems`}>{t.problems}</span>}
+              </button>
             ))}
-          </select>
-          <button type="button" className="btn" onClick={() => setPending({ label: 'a blank project', make: () => projectFromScenario(parseScenario(BLANK)) })}>
-            New
-          </button>
-          <button type="button" className="btn" onClick={() => fileInput.current?.click()}>Import</button>
-          <button type="button" className="btn" onClick={exportScenario}>Export</button>
-          <input ref={fileInput} type="file" accept="application/json,.json" hidden onChange={importFile} />
+          </nav>
         </div>
       </header>
 
-      {pending && (
-        <div className="notice notice-warning" style={{ marginTop: '1rem' }} role="alert">
-          <div className="notice-title">Replace the current project with {pending.label}?</div>
-          <p className="hint">Your current project isn't kept anywhere else. Export it first if you want a copy.</p>
-          <div className="row" style={{ marginTop: '0.5rem' }}>
-            <button type="button" className="btn btn-primary" onClick={confirmReplace}>Replace</button>
-            <button type="button" className="btn" onClick={() => setPending(null)}>Cancel</button>
-          </div>
-        </div>
-      )}
-      {fileError && (
-        <div className="notice notice-critical" style={{ marginTop: '1rem' }} role="alert">
-          {fileError}
-        </div>
-      )}
-      {saveFailed && (
-        <p className="hint" style={{ marginTop: '0.5rem' }}>
-          This browser isn't saving changes (storage is blocked). Export your project to keep it.
+      <div className="page">
+        {fileError && (
+          <Callout
+            tone="critical"
+            role="alert"
+            title="Import failed"
+            actions={<button type="button" className="btn btn--sm" onClick={() => setFileError(null)}>Dismiss</button>}
+          >
+            <p className="hint">{fileError}</p>
+          </Callout>
+        )}
+
+        <main role="tabpanel">
+          {tab === 'setup' && <SetupPanel project={project} update={update} />}
+          {tab === 'employees' && <EmployeesPanel project={project} update={update} />}
+          {tab === 'scoring' && <ScoringPanel project={project} update={update} />}
+          {tab === 'solve' && <SolvePanel project={project} update={update} solver={solver} problems={problems} />}
+        </main>
+      </div>
+
+      <ConfirmDialog
+        open={pending !== null}
+        title="Replace this project?"
+        confirmLabel="Replace"
+        onConfirm={confirmReplace}
+        onCancel={() => setPending(null)}
+      >
+        <p className="hint">
+          This loads {pending?.label}. Your current project isn't kept anywhere else, so export it first if you want a copy.
         </p>
-      )}
-
-      <nav className="tabs" role="tablist" aria-label="Sections">
-        {tabs.map((t) => (
-          <button key={t.id} type="button" role="tab" className="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>
-            {t.label}
-            {t.badge && <span className="badge" aria-label={`${t.badge} problems`}>{t.badge}</span>}
-          </button>
-        ))}
-      </nav>
-
-      <main role="tabpanel">
-        {tab === 'setup' && <SetupPanel project={project} update={update} />}
-        {tab === 'employees' && <EmployeesPanel project={project} update={update} />}
-        {tab === 'scoring' && <ScoringPanel project={project} update={update} />}
-        {tab === 'solve' && <SolvePanel project={project} update={update} solver={solver} problems={problems} />}
-      </main>
-    </div>
+      </ConfirmDialog>
+    </>
   )
 }

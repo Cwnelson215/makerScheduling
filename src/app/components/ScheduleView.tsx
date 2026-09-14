@@ -45,7 +45,7 @@ export function ScheduleView({ schedule, project }: { schedule: Schedule; projec
 
   return (
     <div className="stack">
-      <div className="table-scroll">
+      <div className="schedule-scroll">
         <table className="schedule-table">
           <thead>
             <tr>
@@ -62,7 +62,7 @@ export function ScheduleView({ schedule, project }: { schedule: Schedule; projec
               const delta = hours - employee.targetWeeklyHours
               return (
                 <tr key={employee.id}>
-                  <th scope="row" style={{ fontWeight: 600 }}>{employee.name}</th>
+                  <th scope="row">{employee.name}</th>
                   {DAY_NAMES.map((d, day) => (
                     <td key={d}>
                       {schedule.blocks[e]
@@ -89,7 +89,7 @@ export function ScheduleView({ schedule, project }: { schedule: Schedule; projec
                   ))}
                   <td className="num">
                     <div>{hours}h</div>
-                    <div className="hint">
+                    <div className="hours-target">
                       target {employee.targetWeeklyHours}
                       {delta !== 0 && ` (${delta > 0 ? '+' : ''}${delta})`}
                     </div>
@@ -102,8 +102,8 @@ export function ScheduleView({ schedule, project }: { schedule: Schedule; projec
       </div>
       <p className="hint">Dashed shifts include hours the employee marked not preferred. Pinned shifts were required by a pin.</p>
 
-      <div className="stack" style={{ gap: '0.5rem' }}>
-        <h3>Where the points went</h3>
+      <div className="stack-sm">
+        <h4 className="section-label">Where the points went</h4>
         {charged.length === 0 ? (
           <p className="hint">No penalties. This schedule scores a perfect 100.</p>
         ) : (
@@ -121,8 +121,8 @@ export function ScheduleView({ schedule, project }: { schedule: Schedule; projec
         )}
       </div>
 
-      <div className="stack" style={{ gap: '0.5rem' }}>
-        <h3>Staffing by hour</h3>
+      <div className="stack-sm">
+        <h4 className="section-label">Staffing by hour</h4>
         <WeekGrid
           label="People on shift each hour"
           hours={visibleHours(project)}

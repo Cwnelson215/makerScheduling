@@ -1,26 +1,30 @@
 import { catalogEntry, type RuleSetting } from '../../core/rules/catalog'
 import type { Project, ProjectUpdate } from '../project'
 import { NumberField } from './NumberField'
+import { Card } from './ui/Card'
 
 export function ScoringPanel({ project, update }: { project: Project; update: ProjectUpdate }) {
   const setRule = (id: RuleSetting['id'], patch: Partial<RuleSetting>) =>
     update((p) => ({ ...p, rules: p.rules.map((r) => (r.id === id ? { ...r, ...patch } : r)) }))
 
   return (
-    <section className="panel stack">
-      <div className="stack" style={{ gap: '0.35rem' }}>
-        <h2>Scoring rules</h2>
-        <p className="hint">
-          Every schedule starts at 100. Each rule subtracts its weight for every unit of penalty, so a higher weight
-          means the solver avoids that thing harder. Weights can't go negative: rules only ever subtract, which is what
-          lets the solver drop weak branches early without losing good schedules.
-        </p>
-        <p className="hint">
-          Scores fall as rosters grow, since there are simply more hours to penalize. Use <strong>Find achievable score</strong>{' '}
-          on the Solve tab to pick a sensible threshold.
-        </p>
-      </div>
-
+    <Card
+      title="Scoring rules"
+      description="Every schedule starts at 100. Each rule subtracts its weight per unit of penalty."
+      info={
+        <>
+          <p>
+            A higher weight means the solver avoids that thing harder. Weights can't go negative: rules only ever subtract,
+            which is what lets the solver drop weak branches early without losing good schedules.
+          </p>
+          <p>
+            Scores fall as rosters grow, since there are more hours to penalize. Use <strong>Find achievable score</strong> on
+            the Solve tab to pick a sensible threshold.
+          </p>
+        </>
+      }
+      flush
+    >
       <div className="table-scroll">
         <table className="rules-table">
           <thead>
@@ -34,21 +38,24 @@ export function ScoringPanel({ project, update }: { project: Project; update: Pr
           <tbody>
             {project.rules.map((setting) => {
               const entry = catalogEntry(setting.id)
+              const tight = entry.bound === 'tight'
               return (
                 <tr key={setting.id} className={setting.enabled ? '' : 'is-disabled'}>
                   <td>
                     <input
                       type="checkbox"
+                      role="switch"
+                      className="switch"
                       aria-label={`Use ${entry.label}`}
                       checked={setting.enabled}
                       onChange={(e) => setRule(setting.id, { enabled: e.target.checked })}
                     />
                   </td>
                   <td>
-                    <div style={{ fontWeight: 600 }}>{entry.label}</div>
-                    <div className="hint">{entry.description}</div>
+                    <div className="rule-name">{entry.label}</div>
+                    <div className="rule-description">{entry.description}</div>
                     {setting.id === 'shortShift' && (
-                      <div className="row" style={{ marginTop: '0.4rem' }}>
+                      <div className="row" style={{ marginTop: 'var(--s-2)' }}>
                         <span className="hint">Shorter than</span>
                         <NumberField
                           label="Comfortable shift length in hours"
@@ -64,7 +71,7 @@ export function ScoringPanel({ project, update }: { project: Project; update: Pr
                     )}
                   </td>
                   <td>
-                    <div className="row" style={{ gap: '0.4rem', flexWrap: 'nowrap' }}>
+                    <div className="row" style={{ flexWrap: 'nowrap' }}>
                       <NumberField
                         label={`${entry.label} weight`}
                         hideLabel
@@ -80,14 +87,14 @@ export function ScoringPanel({ project, update }: { project: Project; update: Pr
                   </td>
                   <td>
                     <span
-                      className="tag"
+                      className={`pill${tight ? ' pill--good' : ''}`}
                       title={
-                        entry.bound === 'tight'
+                        tight
                           ? 'Known as soon as a shift is assigned, so it cuts branches early.'
                           : 'Only certain late in the search, so it cuts fewer branches.'
                       }
                     >
-                      {entry.bound === 'tight' ? 'early' : 'late'}
+                      {tight ? 'early' : 'late'}
                     </span>
                   </td>
                 </tr>
@@ -96,6 +103,6 @@ export function ScoringPanel({ project, update }: { project: Project; update: Pr
           </tbody>
         </table>
       </div>
-    </section>
+    </Card>
   )
 }
