@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { formatWeekRange } from '../../core/calendar'
 import { fmtHour } from '../../core/config'
 import { Availability, DAY_NAMES, WEEK_HOURS } from '../../core/types'
 import {
@@ -9,9 +10,12 @@ import {
   paintGrid,
   updateEmployee,
   visibleHours,
+  weekDayLabels,
+  weekMarks,
   type Project,
   type ProjectUpdate,
 } from '../project'
+import { ExceptionsEditor } from './ExceptionsEditor'
 import { NumberField } from './NumberField'
 import { WeekGrid } from './WeekGrid'
 
@@ -29,6 +33,7 @@ export function EmployeesPanel({ project, update }: { project: Project; update: 
   const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   const selected = project.employees.find((e) => e.id === selectedId) ?? project.employees[0] ?? null
+  const marks = selected ? weekMarks(project, selected) : null
 
   const select = (id: string) => {
     setSelectedId(id)
@@ -106,7 +111,11 @@ export function EmployeesPanel({ project, update }: { project: Project; update: 
 
           <div>
             <h3>Availability</h3>
-            <p className="hint">Pick a level, then click or drag across the week. Hours outside operating hours are faded; they never get scheduled.</p>
+            <p className="hint">
+              The usual week. Pick a level, then click or drag across the grid. Hours outside operating hours are faded;
+              they never get scheduled. Time off and pinned shifts for the week of {formatWeekRange(project.weekStart)} are
+              shown on top.
+            </p>
           </div>
 
           <div className="row">
@@ -145,6 +154,7 @@ export function EmployeesPanel({ project, update }: { project: Project; update: 
           <WeekGrid
             label={`${selected.name} availability`}
             hours={visibleHours(project)}
+            dayLabels={weekDayLabels(project)}
             onPaint={(slot) =>
               update((p) => {
                 const current = p.employees.find((e) => e.id === selected.id)
@@ -154,9 +164,12 @@ export function EmployeesPanel({ project, update }: { project: Project; update: 
             describe={(slot, day, hour) => {
               const value = selected.availability[slot]
               const open = isOpen(project, day, hour)
+              const off = marks!.timeOff[slot]
+              const pinned = marks!.pinned[slot]
+              const notes = [off && 'time off this week', pinned && 'pinned this week', !open && 'closed'].filter(Boolean)
               return {
-                className: `avail-${value}${open ? '' : ' avail-outside'}`,
-                title: `${DAY_NAMES[day]} ${fmtHour(hour)}: ${levelName(value)}${open ? '' : ' (closed)'}`,
+                className: `avail-${value}${off ? ' cell-timeoff' : ''}${pinned ? ' cell-pinned' : ''}${open ? '' : ' avail-outside'}`,
+                title: `${DAY_NAMES[day]} ${fmtHour(hour)}: ${levelName(value)}${notes.length ? ` (${notes.join(', ')})` : ''}`,
               }
             }}
           />
@@ -167,7 +180,23 @@ export function EmployeesPanel({ project, update }: { project: Project; update: 
                 <span className={`swatch avail-${level.value}`} /> {level.label}
               </span>
             ))}
+            <span className="legend-item">
+              <span className="swatch avail-2 cell-timeoff" /> Time off
+            </span>
+            <span className="legend-item">
+              <span className="swatch avail-2 cell-pinned" /> Pinned
+            </span>
           </div>
+
+          <div>
+            <h3>Time off & pinned shifts</h3>
+            <p className="hint">
+              Tied to dates. Only entries in the week you're scheduling ({formatWeekRange(project.weekStart)}, set on the
+              Setup tab) affect results. Entries for other weeks are kept for when you get there.
+            </p>
+          </div>
+          {/* Keyed so a half-filled form resets when the employee or week changes. */}
+          <ExceptionsEditor key={`${selected.id}:${project.weekStart}`} project={project} employee={selected} update={update} />
         </section>
       ) : (
         <section className="panel">

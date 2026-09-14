@@ -12,7 +12,11 @@ import {
   type ScheduleConfig,
 } from '../src/core/types'
 
-function employeeWith(available: Partial<Record<number, [number, number][]>>, max = 40): Employee {
+function employeeWith(
+  available: Partial<Record<number, [number, number][]>>,
+  max = 40,
+  pins: Partial<Record<number, [number, number][]>> = {},
+): Employee {
   const availability = new Uint8Array(WEEK_HOURS)
   for (const [day, ranges] of Object.entries(available)) {
     for (const [start, end] of ranges ?? []) {
@@ -21,7 +25,13 @@ function employeeWith(available: Partial<Record<number, [number, number][]>>, ma
       }
     }
   }
-  return { id: 'e', name: 'E', maxWeeklyHours: max, targetWeeklyHours: max, availability }
+  const pinned = new Uint8Array(WEEK_HOURS)
+  for (const [day, ranges] of Object.entries(pins)) {
+    for (const [start, end] of ranges ?? []) {
+      for (let hour = start; hour < end; hour++) pinned[slotIndex(Number(day), hour)] = 1
+    }
+  }
+  return { id: 'e', name: 'E', maxWeeklyHours: max, targetWeeklyHours: max, availability, pinned }
 }
 
 /** Maximal contiguous runs of set bits, low hour first. */
@@ -52,6 +62,7 @@ function isLegalMask(
   config: ScheduleConfig,
 ): boolean {
   const win = config.operatingHours[day]
+  if (!coversPins(mask, employee, day)) return false
   if (!win) return mask === 0
   if (mask === 0) return true
 
@@ -76,8 +87,21 @@ function isLegalMask(
   return true
 }
 
+/** Pinned hours on `day` must all be worked — checked hour by hour, not via a precomputed mask. */
+function coversPins(mask: number, employee: Employee, day: number): boolean {
+  for (let hour = 0; hour < HOURS_PER_DAY; hour++) {
+    if (employee.pinned?.[slotIndex(day, hour)] && !(mask & (1 << hour))) return false
+  }
+  return true
+}
+
 describe('day-pattern enumeration', () => {
-  const variants: { name: string; config: Partial<ScheduleConfig>; available: [number, number][] }[] =
+  const variants: {
+    name: string
+    config: Partial<ScheduleConfig>
+    available: [number, number][]
+    pins?: [number, number][]
+  }[] =
     [
       {
         name: 'single block, 8h window',
@@ -109,6 +133,30 @@ describe('day-pattern enumeration', () => {
         config: { minShiftLength: 5, maxShiftLength: 8, maxDailyHours: 8, allowSplitShifts: false, maxBlocksPerDay: 1 },
         available: [[9, 12]],
       },
+      {
+        name: 'pinned hour, several shifts can cover it',
+        config: { minShiftLength: 3, maxShiftLength: 5, maxDailyHours: 8, allowSplitShifts: true, minGapBetweenBlocks: 2, maxBlocksPerDay: 2 },
+        available: [[8, 20]],
+        pins: [[12, 13]],
+      },
+      {
+        name: 'pins that force a split shift',
+        config: { minShiftLength: 2, maxShiftLength: 3, maxDailyHours: 8, allowSplitShifts: true, minGapBetweenBlocks: 2, maxBlocksPerDay: 2 },
+        available: [[8, 20]],
+        pins: [[8, 9], [17, 18]],
+      },
+      {
+        name: 'pin longer than any legal shift — nothing, not even a day off',
+        config: { minShiftLength: 2, maxShiftLength: 4, maxDailyHours: 8, allowSplitShifts: false, maxBlocksPerDay: 1 },
+        available: [[8, 20]],
+        pins: [[9, 15]],
+      },
+      {
+        name: 'pin on an unavailable hour',
+        config: { minShiftLength: 2, maxShiftLength: 6, maxDailyHours: 8, allowSplitShifts: false, maxBlocksPerDay: 1 },
+        available: [[8, 12], [13, 20]],
+        pins: [[12, 13]],
+      },
     ]
 
   for (const variant of variants) {
@@ -119,7 +167,7 @@ describe('day-pattern enumeration', () => {
         ...variant.config,
         operatingHours: [{ startHour: 8, endHour: 20 }, ...new Array(6).fill(null)],
       }
-      const employee = employeeWith({ 0: variant.available })
+      const employee = employeeWith({ 0: variant.available }, 40, { 0: variant.pins ?? [] })
 
       const produced = enumerateDayPatterns(employee, day, config)
       const producedMasks = produced.map((p) => p.mask)
@@ -139,6 +187,25 @@ describe('day-pattern enumeration', () => {
       expect(new Set(producedMasks)).toEqual(expected)
     })
   }
+
+  it('pins keep exactly the shifts that cover them', () => {
+    const config: ScheduleConfig = {
+      ...DEFAULT_CONFIG,
+      minShiftLength: 2,
+      maxShiftLength: 4,
+      maxDailyHours: 8,
+      allowSplitShifts: false,
+      maxBlocksPerDay: 1,
+      operatingHours: [{ startHour: 8, endHour: 20 }, ...new Array(6).fill(null)],
+    }
+    expect(enumerateDayPatterns(employeeWith({ 0: [[8, 20]] }, 40, { 0: [[9, 15]] }), 0, config)).toEqual([])
+
+    // Hours 10 and 11 pinned: the 2–4h blocks containing both.
+    const covering = enumerateDayPatterns(employeeWith({ 0: [[8, 20]] }, 40, { 0: [[10, 12]] }), 0, config)
+    const ranges = covering.map((p) => [p.blocks[0].startHour, p.blocks[0].endHour])
+    ranges.sort((a, b) => a[0] - b[0] || a[1] - b[1])
+    expect(ranges).toEqual([[8, 12], [9, 12], [9, 13], [10, 12], [10, 13], [10, 14]])
+  })
 
   it('always offers the day-off pattern first', () => {
     const config = { ...DEFAULT_CONFIG, operatingHours: [{ startHour: 9, endHour: 17 }, ...new Array(6).fill(null)] }

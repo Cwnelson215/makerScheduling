@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { parseScenario, type ScenarioJson } from '../src/core/io'
+import { resolveWeek, type EmployeeExceptions } from '../src/core/calendar'
+import { parseScenario, type Scenario, type ScenarioJson } from '../src/core/io'
 import { scoreComplete } from '../src/core/rules/registry'
 import type { CompiledRuleSet, Rule } from '../src/core/rules/types'
 import type { SearchState } from '../src/core/state'
@@ -13,14 +14,33 @@ import {
   type ScheduleConfig,
 } from '../src/core/types'
 
-export function loadFixture(name: string): {
-  name: string
-  employees: Employee[]
-  config: ScheduleConfig
-  threshold: number
-} {
+export function loadFixture(name: string): Scenario {
   const path = resolve(__dirname, '../src/fixtures', name)
   return parseScenario(JSON.parse(readFileSync(path, 'utf8')) as ScenarioJson)
+}
+
+/** Monday of the week the dated fixture exceptions below are written against. */
+export const FIXTURE_WEEK = '2026-09-21'
+
+/**
+ * Dated exceptions for `small-cafe.json` (open Mon and Tue, 9am–3pm), exercising every kind:
+ * a pin that removes Ana's Monday day-off and forces an early start, whole-day time off for
+ * Ben on Tuesday, a single pinned hour for Cleo that several shifts can cover, and an entry
+ * dated outside the week that must be ignored.
+ */
+export const SMALL_CAFE_EXCEPTIONS: Record<string, EmployeeExceptions> = {
+  ana: {
+    pins: [{ date: '2026-09-21', startHour: 9, endHour: 11 }],
+    timeOff: [{ date: '2026-09-30', startHour: 0, endHour: 24 }],
+  },
+  ben: { pins: [], timeOff: [{ date: '2026-09-22', startHour: 0, endHour: 24 }] },
+  cleo: { pins: [{ date: '2026-09-22', startHour: 13, endHour: 14 }], timeOff: [] },
+}
+
+/** `small-cafe.json` with {@link SMALL_CAFE_EXCEPTIONS} applied for {@link FIXTURE_WEEK}. */
+export function loadPinnedSmallCafe(): { employees: Employee[]; config: ScheduleConfig } {
+  const { employees, config } = loadFixture('small-cafe.json')
+  return { employees: resolveWeek(employees, FIXTURE_WEEK, SMALL_CAFE_EXCEPTIONS), config }
 }
 
 /** Deterministic LCG, so a failing property test reproduces exactly from its seed. */

@@ -17,6 +17,8 @@ interface WeekGridProps {
   /** Called for each cell a paint stroke touches. Omit for a read-only grid. */
   onPaint?: (slot: number) => void
   label: string
+  /** Column headers; defaults to the bare day names. */
+  dayLabels?: readonly string[]
 }
 
 /**
@@ -26,7 +28,7 @@ interface WeekGridProps {
  * `pointerenter`, because touch input implicitly captures the pointer to the first cell
  * touched — `pointerenter` would never fire on the rest of the stroke.
  */
-export function WeekGrid({ hours, describe, onPaint, label }: WeekGridProps) {
+export function WeekGrid({ hours, describe, onPaint, label, dayLabels = DAY_NAMES }: WeekGridProps) {
   const painting = useRef(false)
   const lastSlot = useRef(-1)
 
@@ -104,7 +106,7 @@ export function WeekGrid({ hours, describe, onPaint, label }: WeekGridProps) {
       >
         <div role="row" className="week-row week-head">
           <div className="week-hour" />
-          {DAY_NAMES.map((name) => (
+          {dayLabels.map((name) => (
             <div role="columnheader" key={name} className="week-day">
               {name}
             </div>

@@ -1,23 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import {
+  addException,
+  entryTiming,
   loadProject,
   normaliseProject,
   projectFromScenario,
   projectProblems,
   projectToProblem,
   projectToScenario,
+  removeException,
   saveProject,
   setOperatingWindow,
+  setWeekStart,
   STORAGE_KEY,
 } from '../src/app/project'
-import { parseScenario, serializeScenario, type Scenario } from '../src/core/io'
+import { parseScenario, ScenarioError, serializeScenario, type Scenario, type ScenarioJson } from '../src/core/io'
 import { defaultRules } from '../src/core/rules/builtins'
 import { buildRules, defaultRuleSettings, normaliseRuleSettings } from '../src/core/rules/catalog'
 import { solve } from '../src/core/search/solver'
 import { slotIndex } from '../src/core/types'
 import { handleRequest } from '../src/worker/handler'
 import type { SolveResponse } from '../src/worker/protocol'
-import { loadFixture } from './helpers'
+import { FIXTURE_WEEK, loadFixture, SMALL_CAFE_EXCEPTIONS } from './helpers'
 
 /** Typed arrays don't deep-equal plain arrays, so compare scenarios in a neutral form. */
 const plain = (s: Scenario) =>
@@ -33,6 +37,30 @@ describe('scenario serialization', () => {
     })
   }
 
+  it('round-trips a week with dated time off and pins', () => {
+    const json = serializeScenario(datedScenario())
+    expect(json.weekStart).toBe(FIXTURE_WEEK)
+    // Whole-day time off is written without hours, as someone would write it by hand.
+    expect(json.employees.find((e) => e.id === 'ben')!.timeOff).toEqual([{ date: '2026-09-22' }])
+    expect(json.employees.find((e) => e.id === 'cleo')!.pins).toEqual([{ date: '2026-09-22', hours: [13, 14] }])
+    expect(plain(parseScenario(JSON.parse(JSON.stringify(json))))).toEqual(plain(datedScenario()))
+  })
+
+  it('rejects malformed dated entries with a readable reason', () => {
+    const base = () => serializeScenario(datedScenario())
+    const expectError = (mutate: (json: ScenarioJson) => void, fragment: string) => {
+      const json = base()
+      mutate(json)
+      expect(() => parseScenario(json)).toThrow(ScenarioError)
+      expect(() => parseScenario(json)).toThrow(fragment)
+    }
+    expectError((j) => delete j.weekStart, 'dated entries need a top-level weekStart')
+    expectError((j) => (j.weekStart = '2026-09-23'), 'must be a Monday')
+    expectError((j) => (j.employees[1].timeOff = [{ date: '2026-02-30' }]), 'is not a YYYY-MM-DD date')
+    expectError((j) => (j.employees[2].pins = [{ date: '2026-09-22' } as never]), 'a pin needs hours')
+    expectError((j) => (j.employees[2].pins = [{ date: '2026-09-22', hours: [14, 13] }]), 'out of bounds or empty')
+  })
+
   it('preserves per-hour coverage changes, including adjacent different headcounts', () => {
     const scenario = loadFixtureScenario('small-cafe.json')
     scenario.config.minCoverage[slotIndex(0, 10)] = 3
@@ -43,8 +71,12 @@ describe('scenario serialization', () => {
 })
 
 function loadFixtureScenario(name: string): Scenario {
-  const { employees, config, threshold } = loadFixture(name)
-  return { name, employees, config, threshold, rules: defaultRuleSettings() }
+  return { ...loadFixture(name), name, weekStart: FIXTURE_WEEK }
+}
+
+/** small-cafe with a week and dated entries of every kind. */
+function datedScenario(): Scenario {
+  return { ...loadFixtureScenario('small-cafe.json'), exceptions: structuredClone(SMALL_CAFE_EXCEPTIONS) }
 }
 
 describe('rule catalog', () => {
@@ -87,6 +119,15 @@ describe('project model', () => {
     expect(plain(projectToScenario(projectFromScenario(scenario())))).toEqual(plain(scenario()))
   })
 
+  it('round-trips a dated scenario through the editor model', () => {
+    expect(plain(projectToScenario(projectFromScenario(datedScenario())))).toEqual(plain(datedScenario()))
+  })
+
+  it('schedules a scenario without a week for the current week', () => {
+    const undated = { ...loadFixtureScenario('small-cafe.json'), weekStart: null }
+    expect(projectFromScenario(undated, undefined, '2026-09-17').weekStart).toBe('2026-09-14')
+  })
+
   it('survives JSON storage unchanged', () => {
     const project = projectFromScenario(scenario())
     expect(normaliseProject(JSON.parse(JSON.stringify(project)))).toEqual(project)
@@ -101,10 +142,52 @@ describe('project model', () => {
   })
 
   it('fills optional sections an older save might lack', () => {
-    const { rules: _rules, search: _search, ...older } = projectFromScenario(scenario())
-    const loaded = normaliseProject(older)
+    const { rules: _rules, search: _search, weekStart: _week, ...older } = projectFromScenario(scenario())
+    older.employees = older.employees.map(({ timeOff: _t, pins: _p, ...e }) => e as never)
+    const loaded = normaliseProject(older, '2026-09-17')
     expect(loaded?.rules).toEqual(defaultRuleSettings())
     expect(loaded?.search.timeLimitSeconds).toBeGreaterThan(0)
+    expect(loaded?.weekStart).toBe('2026-09-14')
+    expect(loaded?.employees.every((e) => e.timeOff.length === 0 && e.pins.length === 0)).toBe(true)
+  })
+
+  it('rejects malformed dated entries and weeks', () => {
+    const project = projectFromScenario(datedScenario())
+    const withEntry = (entry: unknown) => ({
+      ...project,
+      employees: [{ ...project.employees[0], pins: [entry] }, ...project.employees.slice(1)],
+    })
+    expect(normaliseProject(withEntry({ id: 'x', date: '2026-09-21', startHour: 9, endHour: 12 }))).not.toBeNull()
+    expect(normaliseProject(withEntry({ id: 'x', date: '2026-02-30', startHour: 9, endHour: 12 }))).toBeNull()
+    expect(normaliseProject(withEntry({ id: 'x', date: '2026-09-21', startHour: 12, endHour: 9 }))).toBeNull()
+    expect(normaliseProject({ ...project, weekStart: '2026-09-22' })).toBeNull()
+  })
+
+  it('edits the week and dated entries', () => {
+    let project = projectFromScenario(datedScenario())
+    expect(setWeekStart(project, '2026-10-01').weekStart).toBe('2026-09-28')
+
+    const ana = project.employees[0].id
+    project = addException(project, ana, 'pins', { date: '2026-09-22', startHour: 9, endHour: 12 })
+    project = addException(project, ana, 'pins', { date: '2026-09-18', startHour: 9, endHour: 10 })
+    expect(project.employees[0].pins.map((p) => p.date)).toEqual(['2026-09-18', '2026-09-21', '2026-09-22'])
+    expect(project.employees[0].pins.map((p) => entryTiming(project, p))).toEqual(['past', 'thisWeek', 'thisWeek'])
+    expect(entryTiming(project, project.employees[0].timeOff[0])).toBe('later')
+
+    const removed = removeException(project, ana, 'pins', project.employees[0].pins[0].id)
+    expect(removed.employees[0].pins.map((p) => p.date)).toEqual(['2026-09-21', '2026-09-22'])
+    expect(removed.employees[1]).toBe(project.employees[1])
+  })
+
+  it('reports a pin that clashes with time off', () => {
+    const project = addException(projectFromScenario(datedScenario()), 'ben', 'pins', {
+      date: '2026-09-22',
+      startHour: 10,
+      endHour: 13,
+    })
+    expect(projectProblems(project)).toContain(
+      'Ben is pinned Tue 10am–1pm but is unavailable then (availability or time off)',
+    )
   })
 
   it('closing or narrowing a day clears coverage outside the new window', () => {
@@ -190,6 +273,25 @@ describe('worker handler', () => {
     if (terminal[0].type !== 'solved') throw new Error('unreachable')
     expect(terminal[0].report.complete).toBe(true)
     expect(terminal[0].schedules.map((s) => s.score)).toEqual(direct.schedules.map((s) => s.score))
+  })
+
+  it('solves with this week\'s pins and time off applied', () => {
+    const project = projectFromScenario(datedScenario())
+    project.threshold = -Infinity
+    project.search = { ...project.search, maxResults: 10_000, timeLimitSeconds: 60 }
+    const [terminal] = run('solve', project).filter((m) => m.type !== 'progress')
+    if (terminal.type !== 'solved') throw new Error(`expected a solve, got ${terminal.type}`)
+    expect(terminal.report.complete).toBe(true)
+    expect(terminal.schedules.length).toBeGreaterThan(0)
+
+    const index = (id: string) => project.employees.findIndex((e) => e.id === id)
+    const worked = (blocks: { day: number; startHour: number; endHour: number }[], day: number, hour: number) =>
+      blocks.some((b) => b.day === day && b.startHour <= hour && hour < b.endHour)
+    for (const schedule of terminal.schedules) {
+      expect(worked(schedule.blocks[index('ana')], 0, 9) && worked(schedule.blocks[index('ana')], 0, 10)).toBe(true)
+      expect(schedule.blocks[index('ben')].some((b) => b.day === 1)).toBe(false)
+      expect(worked(schedule.blocks[index('cleo')], 1, 13)).toBe(true)
+    }
   })
 
   it('answers a calibration', () => {

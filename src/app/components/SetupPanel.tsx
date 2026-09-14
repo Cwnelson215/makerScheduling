@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { addDays, formatWeekRange, todayIso } from '../../core/calendar'
 import { fmtHour } from '../../core/config'
 import { DAY_NAMES } from '../../core/types'
 import {
@@ -6,7 +7,9 @@ import {
   openSlots,
   paintGrid,
   setOperatingWindow,
+  setWeekStart,
   visibleHours,
+  weekDayLabels,
   type Project,
   type ProjectUpdate,
   type ShiftRules,
@@ -26,6 +29,37 @@ export function SetupPanel({ project, update }: { project: Project; update: Proj
 
   return (
     <div className="stack">
+      <section className="panel stack">
+        <div>
+          <h2>Week</h2>
+          <p className="hint">The week you're building a schedule for. Time off and pinned shifts on these dates apply.</p>
+        </div>
+        <div className="row">
+          <button type="button" className="btn" aria-label="Previous week" onClick={() => update((p) => setWeekStart(p, addDays(p.weekStart, -7)))}>
+            ‹
+          </button>
+          <label className="field">
+            <span>Week starting</span>
+            <input
+              type="date"
+              value={project.weekStart}
+              onChange={(e) => {
+                const date = e.target.value
+                update((p) => setWeekStart(p, date))
+              }}
+            />
+          </label>
+          <button type="button" className="btn" aria-label="Next week" onClick={() => update((p) => setWeekStart(p, addDays(p.weekStart, 7)))}>
+            ›
+          </button>
+          <strong>{formatWeekRange(project.weekStart)}</strong>
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={() => update((p) => setWeekStart(p, todayIso()))}>
+            This week
+          </button>
+        </div>
+      </section>
+
       <section className="panel stack">
         <div>
           <h2>Operating hours</h2>
@@ -128,6 +162,7 @@ export function SetupPanel({ project, update }: { project: Project; update: Proj
         <WeekGrid
           label="Minimum staff per hour"
           hours={visibleHours(project)}
+          dayLabels={weekDayLabels(project)}
           onPaint={(slot) => update((p) => ({ ...p, minCoverage: paintGrid(p.minCoverage, [slot], brush) }))}
           describe={(slot, day, hour) => {
             const when = `${DAY_NAMES[day]} ${fmtHour(hour)}`

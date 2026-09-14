@@ -37,13 +37,36 @@ const EMPTY_PATTERN: DayPattern = {
   worksOpening: false,
 }
 
+/** Bitmask of the hours `employee` is pinned to on `day`; 0 when nothing is pinned. */
+export function pinnedMask(employee: Employee, day: number): number {
+  if (!employee.pinned) return 0
+  let mask = 0
+  for (let hour = 0; hour < HOURS_PER_DAY; hour++) {
+    if (employee.pinned[slotIndex(day, hour)] !== 0) mask |= 1 << hour
+  }
+  return mask
+}
+
 /**
- * Every legal way `employee` can work `day`, always including the empty "day off" pattern.
+ * Every legal way `employee` can work `day`. Includes the empty "day off" pattern, first,
+ * unless the day has pinned hours.
  *
  * Shift-length bounds, the split-shift gap, and the daily-hours cap are applied while
- * generating, so an illegal shape is never constructed and never needs rejecting later.
+ * generating, so an illegal shape is never constructed and never needs rejecting later. Pins
+ * then keep only the patterns covering every pinned hour — possibly none, when no legal shift
+ * can, which {@link import('./config').validateProblem} reports.
  */
 export function enumerateDayPatterns(
+  employee: Employee,
+  day: number,
+  config: ScheduleConfig,
+): DayPattern[] {
+  const required = pinnedMask(employee, day)
+  const patterns = generateDayPatterns(employee, day, config)
+  return required === 0 ? patterns : patterns.filter((p) => (p.mask & required) === required)
+}
+
+function generateDayPatterns(
   employee: Employee,
   day: number,
   config: ScheduleConfig,

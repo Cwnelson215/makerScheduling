@@ -1,15 +1,21 @@
-import { fmtHour } from '../../core/config'
+import { useMemo } from 'react'
+import { fmtHour, fmtHourRange } from '../../core/config'
 import { catalogEntry } from '../../core/rules/catalog'
 import { Availability, DAY_NAMES, WEEK_HOURS, slotIndex, type Schedule, type ShiftBlock } from '../../core/types'
-import { isOpen, visibleHours, type Project } from '../project'
+import { isOpen, projectToProblem, visibleHours, weekDayLabels, type Project } from '../project'
 import { WeekGrid } from './WeekGrid'
-
-/** `fmtHour` treats 24 as noon; a shift ending at 24 ends at midnight. */
-const clock = (hour: number) => (hour === 24 ? '12am' : fmtHour(hour))
 
 function touchesNotPreferred(block: ShiftBlock, availability: number[]): boolean {
   for (let hour = block.startHour; hour < block.endHour; hour++) {
     if (availability[slotIndex(block.day, hour)] === Availability.NotPreferred) return true
+  }
+  return false
+}
+
+function touchesPinned(block: ShiftBlock, pinned: Uint8Array | undefined): boolean {
+  if (!pinned) return false
+  for (let hour = block.startHour; hour < block.endHour; hour++) {
+    if (pinned[slotIndex(block.day, hour)]) return true
   }
   return false
 }
@@ -20,6 +26,9 @@ function touchesNotPreferred(block: ShiftBlock, availability: number[]): boolean
  * on whoever now sits at that index).
  */
 export function ScheduleView({ schedule, project }: { schedule: Schedule; project: Project }) {
+  // Pins as the solver saw them: this project's week, resolved.
+  const pinned = useMemo(() => projectToProblem(project).employees.map((e) => e.pinned), [project])
+  const dayLabels = weekDayLabels(project)
   const staffed = new Array<number>(WEEK_HOURS).fill(0)
   for (const blocks of schedule.blocks) {
     for (const block of blocks) {
@@ -41,7 +50,7 @@ export function ScheduleView({ schedule, project }: { schedule: Schedule; projec
           <thead>
             <tr>
               <th scope="col">Employee</th>
-              {DAY_NAMES.map((d) => (
+              {dayLabels.map((d) => (
                 <th scope="col" key={d}>{d}</th>
               ))}
               <th scope="col" className="num">Hours</th>
@@ -60,13 +69,19 @@ export function ScheduleView({ schedule, project }: { schedule: Schedule; projec
                         .filter((b) => b.day === day)
                         .map((b) => {
                           const flagged = touchesNotPreferred(b, employee.availability)
+                          const isPinned = touchesPinned(b, pinned[e])
+                          const notes = [
+                            isPinned && 'Covers a pinned shift',
+                            flagged && 'Includes hours this employee marked not preferred',
+                          ].filter(Boolean)
                           return (
                             <span
                               key={b.startHour}
-                              className={`shift-chip${flagged ? ' has-not-preferred' : ''}`}
-                              title={flagged ? 'Includes hours this employee marked not preferred' : undefined}
+                              className={`shift-chip${flagged ? ' has-not-preferred' : ''}${isPinned ? ' is-pinned' : ''}`}
+                              title={notes.length ? notes.join('. ') : undefined}
                             >
-                              {clock(b.startHour)}–{clock(b.endHour)}
+                              {fmtHourRange(b.startHour, b.endHour)}
+                              {isPinned && <span className="chip-note"> · pinned</span>}
                             </span>
                           )
                         })}
@@ -85,7 +100,7 @@ export function ScheduleView({ schedule, project }: { schedule: Schedule; projec
           </tbody>
         </table>
       </div>
-      <p className="hint">Dashed shifts include hours the employee marked not preferred.</p>
+      <p className="hint">Dashed shifts include hours the employee marked not preferred. Pinned shifts were required by a pin.</p>
 
       <div className="stack" style={{ gap: '0.5rem' }}>
         <h3>Where the points went</h3>
@@ -111,6 +126,7 @@ export function ScheduleView({ schedule, project }: { schedule: Schedule; projec
         <WeekGrid
           label="People on shift each hour"
           hours={visibleHours(project)}
+          dayLabels={dayLabels}
           describe={(slot, day, hour) => {
             const when = `${DAY_NAMES[day]} ${fmtHour(hour)}`
             const count = staffed[slot]

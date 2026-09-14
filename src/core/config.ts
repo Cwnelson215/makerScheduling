@@ -1,3 +1,4 @@
+import { enumerateDayPatterns, pinnedMask } from './patterns'
 import {
   Availability,
   DAY_NAMES,
@@ -46,6 +47,9 @@ export function validateProblem(employees: Employee[], config: ScheduleConfig): 
       problems.push(`employee "${e.id}" availability grid must be ${WEEK_HOURS} entries`)
     }
     if (e.maxWeeklyHours < 0) problems.push(`employee "${e.id}" has negative maxWeeklyHours`)
+    if (e.pinned !== undefined && e.pinned.length !== WEEK_HOURS) {
+      problems.push(`employee "${e.id}" pinned grid must be ${WEEK_HOURS} entries`)
+    }
     if (e.targetWeeklyHours > e.maxWeeklyHours) {
       problems.push(
         `employee "${e.id}" targetWeeklyHours (${e.targetWeeklyHours}) exceeds ` +
@@ -122,13 +126,81 @@ export function validateProblem(employees: Employee[], config: ScheduleConfig): 
     }
   }
 
+  // Pins are checked last: deciding whether a legal shift can cover them means enumerating
+  // patterns, which is only meaningful once the grids and shift limits above are sound.
+  if (problems.length === 0) checkPins(employees, config, problems)
+
   if (problems.length > 0) throw new ConfigError(problems)
+}
+
+function checkPins(employees: Employee[], config: ScheduleConfig, problems: string[]): void {
+  for (const e of employees) {
+    if (!e.pinned) continue
+    let minimumHours = 0
+
+    for (let day = 0; day < DAYS_PER_WEEK; day++) {
+      const required = pinnedMask(e, day)
+      if (required === 0) continue
+      const where = `${e.name || e.id} is pinned ${DAY_NAMES[day]}`
+
+      const win = config.operatingHours[day]
+      let outside = 0
+      let unavailable = 0
+      for (let hour = 0; hour < HOURS_PER_DAY; hour++) {
+        if (!(required & (1 << hour))) continue
+        if (win === null || hour < win.startHour || hour >= win.endHour) outside |= 1 << hour
+        else if (e.availability[slotIndex(day, hour)] === Availability.Unavailable) unavailable |= 1 << hour
+      }
+      if (outside !== 0) problems.push(`${where} ${fmtHourRuns(outside)}, outside operating hours`)
+      if (unavailable !== 0) {
+        problems.push(`${where} ${fmtHourRuns(unavailable)} but is unavailable then (availability or time off)`)
+      }
+      if (outside !== 0 || unavailable !== 0) continue
+
+      const patterns = enumerateDayPatterns(e, day, config)
+      if (patterns.length === 0) {
+        problems.push(
+          `${where} ${fmtHourRuns(required)}, but no legal shift covers those hours — check ` +
+            `shift length, split shift and daily-hours limits`,
+        )
+        continue
+      }
+      minimumHours += Math.min(...patterns.map((p) => p.hours))
+    }
+
+    if (minimumHours > e.maxWeeklyHours) {
+      problems.push(
+        `${e.name || e.id}'s pinned shifts need at least ${minimumHours}h, above their ` +
+          `maxWeeklyHours (${e.maxWeeklyHours})`,
+      )
+    }
+  }
+}
+
+/** `'9am–1pm, 3pm–5pm'` for the runs of set bits in a 24-bit hour mask. */
+function fmtHourRuns(mask: number): string {
+  const parts: string[] = []
+  let start = -1
+  for (let hour = 0; hour <= HOURS_PER_DAY; hour++) {
+    const set = hour < HOURS_PER_DAY && (mask & (1 << hour)) !== 0
+    if (set && start < 0) start = hour
+    if (!set && start >= 0) {
+      parts.push(fmtHourRange(start, hour))
+      start = -1
+    }
+  }
+  return parts.join(', ')
 }
 
 export function fmtHour(hour: number): string {
   const suffix = hour < 12 ? 'am' : 'pm'
   const h = hour % 12 === 0 ? 12 : hour % 12
   return `${h}${suffix}`
+}
+
+/** `'9am–1pm'` for `[start, end)`; an end of 24 reads as midnight rather than noon. */
+export function fmtHourRange(startHour: number, endHour: number): string {
+  return `${fmtHour(startHour)}–${endHour === HOURS_PER_DAY ? '12am' : fmtHour(endHour)}`
 }
 
 /** Builds a flat 7*24 coverage grid from a per-day headcount requirement. */

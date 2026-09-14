@@ -16,10 +16,11 @@ npm run solve -- src/fixtures/small-cafe.json   # the same solver from the comma
 
 ## Using the app
 
-1. **Setup** — opening hours per day, shift-length limits, split shifts, and the minimum
-   headcount for each hour (pick a number, then drag across the grid).
-2. **Employees** — add people, set target and maximum weekly hours, and paint availability as
-   preferred, not preferred, or unavailable.
+1. **Setup** — the week you're scheduling, opening hours per day, shift-length limits, split
+   shifts, and the minimum headcount for each hour (pick a number, then drag across the grid).
+2. **Employees** — add people, set target and maximum weekly hours, and paint their usual week
+   as preferred, not preferred, or unavailable. Below the grid, add **time off** and **pinned
+   shifts** on specific dates (see [Time off and pins](#time-off-and-pins)).
 3. **Scoring** — turn rules on or off and set how many points each one costs.
 4. **Solve** — **Find achievable score** measures the best score this roster can reach and
    offers a threshold; **Build schedules** then searches, with live progress. Results show each
@@ -32,6 +33,25 @@ format the CLI reads, and **Import** accepts either that or an exported project.
 The solver runs in a Web Worker, so the page stays responsive during a long search. **Stop**
 terminates the worker, and whatever that run had found is discarded: a synchronous search can't
 be asked to stop politely. To end early and keep results, lower the time limit instead.
+
+## Time off and pins
+
+Availability describes a person's *usual* week. Time off and pins are tied to **calendar dates**
+and only apply when their date falls in the week being scheduled. Entries for other weeks are kept,
+so vacations can be entered ahead of time.
+
+- **Time off** makes those hours unavailable that week, overriding availability.
+- **A pin** means the person *must work at least* those hours. The solver may start earlier, end
+  later, or add a second block on a split-shift day. A pinned day can't be a day off.
+
+Both are hard constraints, never scored. A pin that can't be honoured is reported before any
+search runs: outside opening hours, during time off or unavailable hours, longer than any legal
+shift, or more pinned hours than the weekly maximum.
+
+The solver itself knows nothing about dates. `resolveWeek` (`src/core/calendar.ts`) turns the
+dated entries into that week's availability grid plus a `pinned` grid. Pattern enumeration then
+keeps only the day-patterns that cover every pinned hour, so pins shrink the search rather than
+filtering its results.
 
 ---
 
@@ -150,7 +170,7 @@ Tight-bound rules drive most of the pruning; weak-bound rules are correct but co
 until deep in the tree.
 
 **Hard constraints are never rules** and are never scored: coverage minimums, `maxWeeklyHours`,
-availability, shift-length bounds, gap bounds, `maxDailyHours`.
+availability and time off, pins, shift-length bounds, gap bounds, `maxDailyHours`.
 
 ---
 
@@ -194,17 +214,36 @@ Scenario files use hour ranges rather than 168-entry grids. Anything not listed 
 
 `minCoverage` also accepts per-day ranges: `{ "Mon": [[8, 11, 1], [11, 14, 3]] }`.
 
+Dated entries need a top-level `weekStart`, which must be a Monday. Leave out `hours` for a
+whole day off:
+
+```json
+{
+  "weekStart": "2026-09-21",
+  "employees": [
+    {
+      "id": "ana", "name": "Ana", "maxWeeklyHours": 12, "targetWeeklyHours": 8,
+      "preferred": { "Mon": [[9, 15]], "Tue": [[9, 13]] },
+      "timeOff": [{ "date": "2026-09-22" }, { "date": "2026-10-05", "hours": [9, 12] }],
+      "pins": [{ "date": "2026-09-21", "hours": [9, 11] }]
+    }
+  ]
+}
+```
+
 ---
 
 ## Verification
 
-`npm test` — 124 tests. Three carry the correctness argument:
+`npm test` — 174 tests. Three carry the correctness argument:
 
 **`tests/solver.exhaustive.test.ts` — brute force vs. branch-and-bound.** On a fixture sized so
 full enumeration is feasible, the answer is computed twice: once by naive exhaustion with no
 pruning at all, once by the real solver. The two sets must be *identical*, across six rule
 configurations and a range of thresholds. If any bound is ever too aggressive, this names the
-schedules that were wrongly discarded.
+schedules that were wrongly discarded. It repeats the check with pins and time off applied. Because
+those work by narrowing the pattern lists, it also enumerates the *unconstrained* roster, keeps only
+the schedules that visibly honour the dated entries, and requires the same set.
 
 **`tests/rules.monotonicity.test.ts` — property tests per rule.** Random root-to-leaf walks
 assert non-negativity, monotonicity, and exactness at completion for every rule individually.
@@ -227,7 +266,8 @@ schedule re-validated against the hard constraints from scratch.
 
 ```
 src/core/types.ts              model and constants
-src/core/config.ts             defaults, validation of impossible rosters
+src/core/config.ts             defaults, validation of impossible rosters (including pins)
+src/core/calendar.ts           dates; applies a week's time off and pins to the roster
 src/core/patterns.ts           legal day-pattern enumeration, problem context
 src/core/state.ts              incremental search state (apply / undo)
 src/core/rules/                Rule interface, built-ins, compilation, serializable catalog
@@ -238,14 +278,13 @@ src/core/io.ts                 scenario file parsing and serialization
 src/cli.ts                     dev harness
 src/app/project.ts             editor model: plain-data project, edits, persistence
 src/app/useSolver.ts           owns the solver worker (progress, cancel, results)
-src/app/components/            Setup, Employees, Scoring, Solve screens; paintable week grid
+src/app/components/            Setup, Employees, Scoring, Solve screens; week grid; time off & pins
 src/worker/                    worker entry, message protocol, request handler
 ```
 
 ## Not built yet
 
 - **Roles and skills.** Coverage is a plain headcount per hour; anyone available counts.
-- **Date-specific exceptions** (time off in a particular week) and **pinned assignments**.
 - **Constraint propagation** in the solver, which would let large rosters finish instead of
   hitting the time limit.
 - **Schedule export** (CSV, calendar, printable week). Export currently saves the project, not a

@@ -7,7 +7,7 @@ import { applyPattern, createState, isComplete, undoPattern } from '../src/core/
 import { buildSlotOrder } from '../src/core/search/ordering'
 import { solve } from '../src/core/search/solver'
 import { DAYS_PER_WEEK } from '../src/core/types'
-import { loadFixture, makeRng, ruleLowerBound } from './helpers'
+import { loadFixture, loadPinnedSmallCafe, makeRng, ruleLowerBound } from './helpers'
 
 /**
  * The contract every rule must satisfy for pruning to be safe:
@@ -25,11 +25,17 @@ import { loadFixture, makeRng, ruleLowerBound } from './helpers'
  * the offending rule directly.
  */
 describe('rule lower bounds are monotone', () => {
-  const fixtures = ['small-cafe.json', 'medium-shop.json']
+  const fixtures = [
+    { name: 'small-cafe.json', load: () => loadFixture('small-cafe.json') },
+    { name: 'medium-shop.json', load: () => loadFixture('medium-shop.json') },
+    // Pinned days have no day-off pattern, so bounds that reason about undecided days get
+    // exercised on slots where "might not work at all" is false.
+    { name: 'small-cafe.json with pins and time off', load: loadPinnedSmallCafe },
+  ]
 
   for (const fixture of fixtures) {
-    describe(fixture, () => {
-      const { employees, config } = loadFixture(fixture)
+    describe(fixture.name, () => {
+      const { employees, config } = fixture.load()
       const ctx = buildProblemContext(employees, config)
       const rules = defaultRules()
       const ruleSet = compileRules(rules, ctx, 0)
@@ -54,7 +60,7 @@ describe('rule lower bounds are monotone', () => {
           for (let p = 0; p < patterns.length; p++) {
             if (state.employeeHours[employee] + patterns[p].hours <= maxWeekly) legal.push(p)
           }
-          expect(legal.length).toBeGreaterThan(0) // index 0 is always the empty pattern
+          expect(legal.length).toBeGreaterThan(0) // the day off, or a pinned day under a generous cap
 
           applyPattern(state, legal[Math.floor(rng() * legal.length)])
 

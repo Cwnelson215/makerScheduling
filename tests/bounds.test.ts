@@ -7,12 +7,15 @@ import { applyPattern, createState, undoPattern } from '../src/core/state'
 import { buildSlotOrder } from '../src/core/search/ordering'
 import { calibrate, solve } from '../src/core/search/solver'
 import { DAYS_PER_WEEK, HOURS_PER_DAY, WEEK_HOURS, slotIndex } from '../src/core/types'
-import { bruteForce, loadFixture, makeRng } from './helpers'
+import { bruteForce, loadFixture, loadPinnedSmallCafe, makeRng } from './helpers'
 
 const THRESHOLD = 70
 
-describe('pruning never cuts off a qualifying schedule', () => {
-  const { employees, config } = loadFixture('small-cafe.json')
+for (const fixture of [
+  { name: 'small-cafe.json', load: () => loadFixture('small-cafe.json'), minHits: 100 },
+  { name: 'small-cafe.json with pins and time off', load: loadPinnedSmallCafe, minHits: 1 },
+]) describe(`pruning never cuts off a qualifying schedule: ${fixture.name}`, () => {
+  const { employees, config } = fixture.load()
   const ctx = buildProblemContext(employees, config)
   const rules = defaultRules()
   const ruleSet = compileRules(rules, ctx, THRESHOLD)
@@ -25,7 +28,7 @@ describe('pruning never cuts off a qualifying schedule', () => {
    */
   it('every prefix of every valid schedule survives all three prunes', () => {
     const hits = bruteForce(ctx, ruleSet, THRESHOLD)
-    expect(hits.length).toBeGreaterThan(100)
+    expect(hits.length).toBeGreaterThanOrEqual(fixture.minHits)
 
     const state = createState(ctx, order, ruleSet.localPenaltyTable)
 

@@ -15,7 +15,16 @@ import {
 import { compileRules } from '../src/core/rules/registry'
 import type { Rule } from '../src/core/rules/types'
 import { solve } from '../src/core/search/solver'
-import { bruteForce, loadFixture, searchSpaceSize } from './helpers'
+import { weekDayIndex } from '../src/core/calendar'
+import { DAYS_PER_WEEK, HOURS_PER_DAY, type ProblemContext } from '../src/core/types'
+import {
+  bruteForce,
+  FIXTURE_WEEK,
+  loadFixture,
+  loadPinnedSmallCafe,
+  searchSpaceSize,
+  SMALL_CAFE_EXCEPTIONS,
+} from './helpers'
 
 /**
  * The proof that pruning is sound.
@@ -169,4 +178,84 @@ describe('branch-and-bound matches exhaustive enumeration', () => {
     }
     expect(tight.schedules.length).toBeLessThan(loose.schedules.length)
   })
+})
+
+/**
+ * Pins and time off are implemented by narrowing the pattern lists, so the brute force above —
+ * which enumerates those same lists — cannot on its own tell whether the narrowing is right.
+ * These tests add an independent statement of the constraint: enumerate the *unconstrained*
+ * roster and keep only schedules that visibly honour the dated entries.
+ */
+describe('pins and time off', () => {
+  const raw = loadFixture('small-cafe.json')
+  const pinned = loadPinnedSmallCafe()
+  const rawCtx = buildProblemContext(raw.employees, raw.config)
+  const pinnedCtx = buildProblemContext(pinned.employees, pinned.config)
+
+  /** A schedule as its per-slot worked-hour masks — comparable across the two contexts. */
+  const maskKey = (key: string, ctx: ProblemContext) =>
+    key.split(',').map((index, slot) => ctx.patterns[slot][Number(index)].mask).join(',')
+
+  /** Plain reading of the dated entries: every pinned hour worked, no hour worked in time off. */
+  const honoursExceptions = (masks: number[]): boolean =>
+    raw.employees.every((employee, e) => {
+      const { pins, timeOff } = SMALL_CAFE_EXCEPTIONS[employee.id] ?? { pins: [], timeOff: [] }
+      const hoursOf = (entry: { date: string; startHour: number; endHour: number }) => {
+        const day = weekDayIndex(FIXTURE_WEEK, entry.date)
+        if (day === null) return null
+        let mask = 0
+        for (let hour = entry.startHour; hour < Math.min(entry.endHour, HOURS_PER_DAY); hour++) mask |= 1 << hour
+        return { worked: masks[e * DAYS_PER_WEEK + day], mask }
+      }
+      return (
+        pins.every((entry) => {
+          const h = hoursOf(entry)
+          return h === null || (h.worked & h.mask) === h.mask
+        }) &&
+        timeOff.every((entry) => {
+          const h = hoursOf(entry)
+          return h === null || (h.worked & h.mask) === 0
+        })
+      )
+    })
+
+  it('actually constrains the fixture', () => {
+    expect(searchSpaceSize(pinnedCtx)).toBeLessThan(searchSpaceSize(rawCtx))
+    // Ana's pinned Monday leaves no day-off option.
+    expect(pinnedCtx.patterns[0 * DAYS_PER_WEEK + 0].every((p) => p.hours > 0)).toBe(true)
+  })
+
+  for (const threshold of [-Infinity, 0, 60, 75]) {
+    it(`narrowed patterns select exactly the schedules that honour the entries @ threshold ${threshold}`, () => {
+      const expected = new Map(
+        bruteForce(rawCtx, compileRules(defaultRules(), rawCtx, threshold), threshold)
+          .map((hit) => [maskKey(hit.key, rawCtx), hit.score] as const)
+          .filter(([key]) => honoursExceptions(key.split(',').map(Number))),
+      )
+      const actual = new Map(
+        bruteForce(pinnedCtx, compileRules(defaultRules(), pinnedCtx, threshold), threshold).map(
+          (hit) => [maskKey(hit.key, pinnedCtx), hit.score] as const,
+        ),
+      )
+      if (threshold === -Infinity) expect(expected.size).toBeGreaterThan(0)
+      expect(actual).toEqual(expected)
+    })
+  }
+
+  for (const threshold of [-Infinity, 0, 60, 75]) {
+    it(`branch-and-bound matches exhaustive enumeration @ threshold ${threshold}`, () => {
+      const rules = defaultRules()
+      const expected = bruteForce(pinnedCtx, compileRules(rules, pinnedCtx, threshold), threshold)
+      const { schedules, report } = solve(pinned.employees, pinned.config, {
+        rules,
+        threshold,
+        maxResults: 1_000_000,
+        maxNodes: Infinity,
+        maxMillis: Infinity,
+        assertBoundsExact: true,
+      })
+      expect(report.complete).toBe(true)
+      expect(schedules.map((s) => s.patternIndices.join(',')).sort()).toEqual(expected.map((h) => h.key).sort())
+    })
+  }
 })

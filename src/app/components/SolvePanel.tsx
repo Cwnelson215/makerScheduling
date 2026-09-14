@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { formatWeekRange } from '../../core/calendar'
 import type { SearchReport } from '../../core/report'
 import type { Project, ProjectUpdate } from '../project'
 import type { SolvedRun, useSolver } from '../useSolver'
@@ -10,7 +11,7 @@ const score = (x: number) => String(Number(x.toFixed(2)))
 
 /** The parts of a project that change which schedules are valid or how they score. */
 const solveInputs = (p: Project) =>
-  JSON.stringify([p.operatingHours, p.minCoverage, p.shiftRules, p.employees, p.rules, p.threshold])
+  JSON.stringify([p.weekStart, p.operatingHours, p.minCoverage, p.shiftRules, p.employees, p.rules, p.threshold])
 
 function stopDescription(report: SearchReport): string {
   switch (report.stopReason) {
@@ -242,6 +243,7 @@ function ResultSection({ run, project }: { run: SolvedRun; project: Project }) {
     <section className="panel stack">
       <div className="row">
         <h2>Results</h2>
+        <span className="muted">week of {formatWeekRange(run.project.weekStart)}</span>
         {stale && <span className="stale">The project has changed since these were built. Build again to update them.</span>}
       </div>
 

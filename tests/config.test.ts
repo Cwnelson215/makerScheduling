@@ -53,6 +53,52 @@ describe('problem validation', () => {
     ).not.toThrow()
   })
 
+  describe('pins', () => {
+    const pinnedTo = (day: number, start: number, end: number, overrides: Partial<Employee> = {}) => {
+      const pinned = new Uint8Array(WEEK_HOURS)
+      for (let hour = start; hour < end; hour++) pinned[slotIndex(day, hour)] = 1
+      return makeEmployee({ pinned, ...overrides })
+    }
+
+    it('accepts a pin a legal shift can cover', () => {
+      expect(() => validateProblem([pinnedTo(0, 10, 12)], openWeek)).not.toThrow()
+    })
+
+    it('rejects a pin outside operating hours', () => {
+      expectProblem([pinnedTo(0, 7, 10)], openWeek, 'A is pinned Mon 7am–9am, outside operating hours')
+    })
+
+    it('rejects a pin on a closed day', () => {
+      const closedMonday = { ...openWeek, operatingHours: [null, ...openWeek.operatingHours.slice(1)] }
+      expectProblem([pinnedTo(0, 10, 12)], closedMonday, 'outside operating hours')
+    })
+
+    it('rejects a pin while unavailable, which is how a clash with time off surfaces', () => {
+      const availability = new Uint8Array(WEEK_HOURS).fill(Availability.Preferred)
+      availability[slotIndex(1, 11)] = Availability.Unavailable
+      expectProblem(
+        [pinnedTo(1, 10, 13, { availability })],
+        openWeek,
+        'A is pinned Tue 11am–12pm but is unavailable then',
+      )
+    })
+
+    it('rejects pinned hours no legal shift can cover', () => {
+      const tight = { ...openWeek, maxShiftLength: 4, maxDailyHours: 8, allowSplitShifts: false }
+      expectProblem([pinnedTo(2, 9, 15)], tight, 'no legal shift covers those hours')
+    })
+
+    it('rejects pins that together exceed the weekly cap', () => {
+      const pinned = new Uint8Array(WEEK_HOURS)
+      for (const day of [0, 1, 2]) for (let hour = 9; hour < 12; hour++) pinned[slotIndex(day, hour)] = 1
+      expectProblem(
+        [makeEmployee({ pinned, maxWeeklyHours: 8, targetWeeklyHours: 8 })],
+        openWeek,
+        "A's pinned shifts need at least 9h, above their maxWeeklyHours (8)",
+      )
+    })
+  })
+
   it('rejects an empty roster', () => {
     expectProblem([], openWeek, 'no employees')
   })

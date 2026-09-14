@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { formatWeekRange } from './core/calendar'
 import { ConfigError } from './core/config'
-import { parseScenario, ScenarioError, type ScenarioJson } from './core/io'
+import { parseScenario, scenarioEmployees, ScenarioError, type ScenarioJson } from './core/io'
 import { PatternExplosionError } from './core/patterns'
 import { formatReport, formatSchedule } from './core/report'
 import { buildRules } from './core/rules/catalog'
@@ -63,6 +64,8 @@ function main(): void {
   const path = resolve(process.cwd(), file)
   const json = JSON.parse(readFileSync(path, 'utf8')) as ScenarioJson
   const scenario = parseScenario(json)
+  const employees = scenarioEmployees(scenario)
+  const week = scenario.weekStart ? `, week of ${formatWeekRange(scenario.weekStart)}` : ''
 
   const threshold = flags.has('threshold')
     ? numeric(flags, 'threshold', scenario.threshold)
@@ -75,12 +78,8 @@ function main(): void {
   }
 
   if (flags.has('calibrate')) {
-    process.stdout.write(`${scenario.name} — calibrating…\n\n`)
-    const { bestScore, suggestedThreshold, report } = calibrate(
-      scenario.employees,
-      scenario.config,
-      budget,
-    )
+    process.stdout.write(`${scenario.name}${week} — calibrating…\n\n`)
+    const { bestScore, suggestedThreshold, report } = calibrate(employees, scenario.config, budget)
     process.stdout.write(`${formatReport(report)}\n\n`)
     if (bestScore === null) {
       process.stdout.write(
@@ -100,10 +99,10 @@ function main(): void {
   }
 
   process.stdout.write(
-    `${scenario.name} — ${scenario.employees.length} employees, threshold ${threshold}\n\n`,
+    `${scenario.name}${week} — ${employees.length} employees, threshold ${threshold}\n\n`,
   )
 
-  const { schedules, report, ctx } = solve(scenario.employees, scenario.config, {
+  const { schedules, report, ctx } = solve(employees, scenario.config, {
     threshold,
     maxResults: numeric(flags, 'max-results', 100),
     ...budget,

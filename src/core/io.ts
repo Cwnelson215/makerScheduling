@@ -1,3 +1,4 @@
+import { isIsoDate, mondayOf, resolveWeek, type DatedHours, type EmployeeExceptions } from './calendar'
 import { DEFAULT_CONFIG } from './config'
 import { normaliseRuleSettings, type RuleSetting } from './rules/catalog'
 import {
@@ -17,6 +18,18 @@ export type HourRange = [number, number]
 /** `[startHour, endHourExclusive, headcount]`. */
 export type CoverageRange = [number, number, number]
 
+/** Time off on a date; omitting `hours` means the whole day. */
+export interface TimeOffJson {
+  date: string
+  hours?: HourRange
+}
+
+/** Hours an employee must work on a date. */
+export interface PinJson {
+  date: string
+  hours: HourRange
+}
+
 export type DayName = (typeof DAY_NAMES)[number]
 export type PerDay<T> = Partial<Record<DayName, T>>
 
@@ -27,6 +40,8 @@ export type PerDay<T> = Partial<Record<DayName, T>>
 export interface ScenarioJson {
   name?: string
   threshold?: number
+  /** Monday of the week being scheduled, `YYYY-MM-DD`. Required when any employee has dated entries. */
+  weekStart?: string
   /** Rule weights. Omitted rules take their catalog defaults. */
   rules?: Partial<RuleSetting>[]
   config: {
@@ -49,6 +64,9 @@ export interface ScenarioJson {
     targetWeeklyHours: number
     preferred?: PerDay<HourRange[]>
     notPreferred?: PerDay<HourRange[]>
+    /** Dated; entries outside `weekStart`'s week are kept but have no effect. */
+    timeOff?: TimeOffJson[]
+    pins?: PinJson[]
   }[]
 }
 
@@ -89,9 +107,29 @@ export interface Scenario {
   config: ScheduleConfig
   threshold: number
   rules: RuleSetting[]
+  /** Monday of the week being scheduled, or `null` when the scenario has no dated entries. */
+  weekStart: string | null
+  /**
+   * Dated time off and pins by employee id, kept apart from `employees` so the file round-trips
+   * exactly. Solve with {@link scenarioEmployees}, which applies them.
+   */
+  exceptions: Record<string, EmployeeExceptions>
+}
+
+/** The scenario's employees with its dated time off and pins applied for its week. */
+export function scenarioEmployees(scenario: Scenario): Employee[] {
+  return resolveWeek(scenario.employees, scenario.weekStart, scenario.exceptions)
 }
 
 export function parseScenario(json: ScenarioJson): Scenario {
+  const weekStart = json.weekStart ?? null
+  if (weekStart !== null) {
+    if (!isIsoDate(weekStart)) throw new ScenarioError(`weekStart "${weekStart}" is not a YYYY-MM-DD date`)
+    if (mondayOf(weekStart) !== weekStart) {
+      throw new ScenarioError(`weekStart "${weekStart}" must be a Monday (that week's Monday is ${mondayOf(weekStart)})`)
+    }
+  }
+
   const operatingHours: (OperatingWindow | null)[] = new Array(DAYS_PER_WEEK).fill(null)
   for (const [key, range] of Object.entries(json.config.operatingHours)) {
     const day = dayIndex(key, 'config.operatingHours')
@@ -133,6 +171,7 @@ export function parseScenario(json: ScenarioJson): Scenario {
     maxConsecutiveDays: json.config.maxConsecutiveDays ?? DEFAULT_CONFIG.maxConsecutiveDays,
   }
 
+  const exceptions: Record<string, EmployeeExceptions> = {}
   const employees: Employee[] = json.employees.map((raw) => {
     const availability = new Uint8Array(WEEK_HOURS) // defaults to Unavailable
     const paint = (spec: PerDay<HourRange[]> | undefined, level: Availability, field: string) => {
@@ -151,6 +190,23 @@ export function parseScenario(json: ScenarioJson): Scenario {
     paint(raw.preferred, Availability.Preferred, 'preferred')
     paint(raw.notPreferred, Availability.NotPreferred, 'notPreferred')
 
+    const dated = (date: unknown, hours: HourRange, where: string): DatedHours => {
+      if (weekStart === null) throw new ScenarioError(`${where}: dated entries need a top-level weekStart`)
+      if (!isIsoDate(date)) throw new ScenarioError(`${where}: "${String(date)}" is not a YYYY-MM-DD date`)
+      checkRange(hours, where)
+      return { date, startHour: hours[0], endHour: hours[1] }
+    }
+    exceptions[raw.id] = {
+      timeOff: (raw.timeOff ?? []).map((entry, i) =>
+        dated(entry.date, entry.hours ?? [0, HOURS_PER_DAY], `employee "${raw.id}".timeOff[${i}]`),
+      ),
+      pins: (raw.pins ?? []).map((entry, i) => {
+        const where = `employee "${raw.id}".pins[${i}]`
+        if (!Array.isArray(entry.hours)) throw new ScenarioError(`${where}: a pin needs hours`)
+        return dated(entry.date, entry.hours, where)
+      }),
+    }
+
     return {
       id: raw.id,
       name: raw.name,
@@ -166,6 +222,8 @@ export function parseScenario(json: ScenarioJson): Scenario {
     config,
     threshold: json.threshold ?? 0,
     rules: normaliseRuleSettings(json.rules),
+    weekStart,
+    exceptions,
   }
 }
 
@@ -221,6 +279,7 @@ export function serializeScenario(scenario: Scenario): ScenarioJson {
       if (p.length > 0) preferred[DAY_NAMES[day]] = p
       if (n.length > 0) notPreferred[DAY_NAMES[day]] = n
     }
+    const { timeOff = [], pins = [] } = scenario.exceptions[employee.id] ?? {}
     return {
       id: employee.id,
       name: employee.name,
@@ -228,12 +287,21 @@ export function serializeScenario(scenario: Scenario): ScenarioJson {
       targetWeeklyHours: employee.targetWeeklyHours,
       preferred,
       notPreferred,
+      ...(timeOff.length > 0 && {
+        timeOff: timeOff.map(({ date, startHour, endHour }): TimeOffJson =>
+          startHour === 0 && endHour === HOURS_PER_DAY ? { date } : { date, hours: [startHour, endHour] },
+        ),
+      }),
+      ...(pins.length > 0 && {
+        pins: pins.map(({ date, startHour, endHour }): PinJson => ({ date, hours: [startHour, endHour] })),
+      }),
     }
   })
 
   return {
     name: scenario.name,
     threshold: scenario.threshold,
+    ...(scenario.weekStart !== null && { weekStart: scenario.weekStart }),
     rules: scenario.rules,
     config: {
       operatingHours,

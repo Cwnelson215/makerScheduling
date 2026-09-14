@@ -172,6 +172,15 @@ input:focus-visible, select:focus-visible, button:focus-visible {
 }
 .avail-0 { background: var(--avail-unavailable); }
 .avail-outside { opacity: 0.45; }
+/* Time off: a dense cross-hatch over whatever the recurring availability is, so it reads as
+   "not this week" rather than as a change to the usual week underneath. */
+.cell-timeoff {
+  background:
+    repeating-linear-gradient(45deg, var(--ink-2) 0 1.5px, transparent 1.5px 5px),
+    repeating-linear-gradient(-45deg, var(--ink-2) 0 1.5px, transparent 1.5px 5px),
+    var(--avail-unavailable);
+}
+.cell-pinned { box-shadow: inset 0 0 0 2px var(--ink); }
 
 .seq-0 { background: var(--neutral-fill); color: var(--ink-muted); }
 .seq-1 { background: var(--seq-1); color: var(--ink); }
@@ -209,6 +218,15 @@ input:focus-visible, select:focus-visible, button:focus-visible {
 .employee-item:hover { background: var(--neutral-fill); }
 .employee-item[aria-current='true'] { border-color: var(--accent); background: var(--surface-raised); }
 
+.exceptions { display: grid; gap: 1rem 1.5rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); }
+.exception-list { gap: 0.5rem; }
+.exception-list h4 { margin: 0; font-size: 0.95rem; }
+.exception-form { align-items: flex-end; }
+.entry-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+.entry { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.5rem; border: 1px solid var(--hairline); border-radius: 6px; font-size: 0.9rem; }
+.entry.is-elsewhere > span:first-child { color: var(--ink-muted); }
+.btn-small { padding: 0.15rem 0.5rem; font-size: 0.8rem; }
+
 /* ---------- Scoring ---------- */
 .rules-table { width: 100%; border-collapse: collapse; }
 .rules-table th { text-align: left; font-size: 0.8rem; font-weight: 600; color: var(--ink-2); padding: 0.4rem; border-bottom: 1px solid var(--hairline); }
@@ -243,6 +261,8 @@ input:focus-visible, select:focus-visible, button:focus-visible {
   background: color-mix(in srgb, var(--avail-preferred) 16%, var(--surface)); border: 1px solid color-mix(in srgb, var(--avail-preferred) 45%, var(--surface));
 }
 .shift-chip.has-not-preferred { border-style: dashed; border-color: var(--avail-not-preferred); }
+.shift-chip.is-pinned { border-width: 2px; border-color: var(--ink); }
+.chip-note { color: var(--ink-2); }
 .delta-over { color: var(--ink-2); }
 
 .penalties { display: flex; flex-direction: column; gap: 0.3rem; }

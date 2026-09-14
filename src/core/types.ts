@@ -28,6 +28,12 @@ export interface Employee {
   targetWeeklyHours: number
   /** Flat 7*24 grid of {@link Availability}, indexed by {@link slotIndex}. */
   availability: Uint8Array
+  /**
+   * Optional flat 7*24 grid; a non-zero entry means the employee must work that hour. A hard
+   * constraint — every day-pattern generated for a pinned day covers its pinned hours, and may
+   * extend beyond them.
+   */
+  pinned?: Uint8Array
 }
 
 /** A contiguous run of worked hours on one day. `endHour` is exclusive. */
@@ -95,8 +101,9 @@ export interface ProblemContext {
   employees: Employee[]
   config: ScheduleConfig
   /**
-   * `patterns[employeeIndex * 7 + day]` — every legal day-pattern for that slot, always
-   * including the empty "day off" pattern at index 0.
+   * `patterns[employeeIndex * 7 + day]` — every legal day-pattern for that slot. The empty
+   * "day off" pattern sits at index 0 unless the day has pinned hours, in which case it is not
+   * legal and is absent.
    */
   patterns: DayPattern[][]
   /** `maxHoursPerSlot[e * 7 + d]` — most hours employee `e` could possibly work on day `d`. */
