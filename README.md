@@ -61,6 +61,25 @@ The solver runs in a Web Worker, so the page stays responsive during a long sear
 terminates the worker, and whatever that run had found is discarded: a synchronous search can't
 be asked to stop politely. To end early and keep results, choose a shorter search time instead.
 
+## Desktop app (Windows)
+
+The same app also ships as an installable Windows program: an Electron window around the built
+web app, with nothing added or changed inside it.
+
+```bash
+npm run app        # build, then open it as a desktop window on this machine
+npm run dist:win   # build release/Schedule-Maker-Setup-<version>.exe
+```
+
+`dist:win` runs on Windows, or on Linux/macOS with Wine installed. The installer needs no admin
+rights: it installs for the current user and adds Start menu and desktop shortcuts. It isn't
+code-signed, so Windows SmartScreen warns on first run ("More info" → "Run anyway").
+
+The installed app keeps its own autosave, separate from any browser's. To move a project across,
+use **Save backup file** in one and **Open backup file** in the other.
+
+The icon is `build/icon.svg`; `icon.png` and `icon.ico` are rendered from it.
+
 ## Time off and pins
 
 Availability describes a person's *usual* week. Time off and pins are tied to **calendar dates**
@@ -324,6 +343,8 @@ src/app/useSolver.ts           owns the solver worker (progress, cancel, results
 src/app/people.ts              initials, week notes, and each person's colour slot
 src/app/components/            one component per page; stepper, week switcher, grids, shift table and timeline
 src/worker/                    worker entry, message protocol, request handler
+electron/main.js               desktop shell: one window serving dist/ over app://
+build/                         desktop icon (svg source, png, ico)
 ```
 
 ## Not built yet

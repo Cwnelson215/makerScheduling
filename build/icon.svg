@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Schedule Maker: three staggered shifts on a timeline, in the app's first three person colours. -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2b33"/>
+      <stop offset="1" stop-color="#141418"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#plate)"/>
+  <g stroke="#ffffff" stroke-opacity="0.09" stroke-width="10" stroke-linecap="round">
+    <path d="M304 176v672M512 176v672M720 176v672"/>
+  </g>
+  <rect x="168" y="232" width="448" height="150" rx="44" fill="#3987e5"/>
+  <rect x="408" y="437" width="448" height="150" rx="44" fill="#eb6834"/>
+  <rect x="272" y="642" width="448" height="150" rx="44" fill="#1baf7a"/>
+</svg>
