@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { EmployeesPanel } from './app/components/EmployeesPanel'
-import { ScoringPanel } from './app/components/ScoringPanel'
-import { SetupPanel } from './app/components/SetupPanel'
+import { CoveragePage } from './app/components/CoveragePage'
+import { EmployeePage } from './app/components/EmployeePage'
+import { EmployeesPage } from './app/components/EmployeesPage'
+import { SchedulePanel } from './app/components/SchedulePanel'
+import { SettingsPage } from './app/components/SettingsPage'
 import { SolvePanel } from './app/components/SolvePanel'
+import { StepFooter, Stepper } from './app/components/Stepper'
 import { Callout } from './app/components/ui/Callout'
 import { ConfirmDialog } from './app/components/ui/ConfirmDialog'
-import { Icon, LogoMark, type IconName } from './app/components/ui/Icon'
+import { Icon, LogoMark } from './app/components/ui/Icon'
 import { Menu } from './app/components/ui/Menu'
+import { WeekSwitcher } from './app/components/WeekSwitcher'
+import { downloadFile } from './app/download'
 import {
   loadProject,
   normaliseProject,
@@ -14,15 +19,21 @@ import {
   projectProblems,
   projectToScenario,
   saveProject,
+  saveWeekSchedule,
+  setWeekStart,
+  solveKey,
   type Project,
   type ProjectUpdate,
 } from './app/project'
-import { useSolver } from './app/useSolver'
+import { stepOf, stepRoute, useRoute } from './app/routes'
+import { stepStates, type StepId } from './app/steps'
+import { useTheme } from './app/theme'
+import { useSolver, type SolvedRun } from './app/useSolver'
+import { useUndoable } from './app/useUndoable'
+import { addDays, todayIso } from './core/calendar'
 import { parseScenario, serializeScenario, type ScenarioJson } from './core/io'
 import mediumShop from './fixtures/medium-shop.json'
 import smallCafe from './fixtures/small-cafe.json'
-
-type Tab = 'setup' | 'employees' | 'scoring' | 'solve'
 
 const EXAMPLES: Record<string, { label: string; json: ScenarioJson }> = {
   'small-cafe': { label: 'Small Cafe (3 people)', json: smallCafe as unknown as ScenarioJson },
@@ -47,44 +58,81 @@ function storage(): Storage | undefined {
   }
 }
 
+const slug = (name: string) => name.trim().replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'schedule'
+
+/** Text fields keep their own Ctrl+Z; the project-wide shortcut must not steal it. */
+const isTextEntry = (target: EventTarget | null) =>
+  target instanceof HTMLElement &&
+  target.closest('textarea, select, [contenteditable="true"], input:not([type="checkbox"]):not([type="radio"]):not([type="button"])') !== null
+
 type PendingReplace = { label: string; make: () => Project }
 
 export function App() {
-  const [project, setProject] = useState<Project>(
-    () => loadProject(storage()) ?? projectFromScenario(parseScenario(EXAMPLES['small-cafe'].json)),
-  )
-  const [tab, setTab] = useState<Tab>('setup')
+  const [initial] = useState(() => {
+    const stored = loadProject(storage())
+    return { project: stored ?? projectFromScenario(parseScenario(EXAMPLES['small-cafe'].json)), fresh: stored === null }
+  })
+  const history = useUndoable(() => initial.project)
+  const project = history.value
+  const update: ProjectUpdate = history.update
+
+  const [route, navigate] = useRoute()
+  const [theme, toggleTheme] = useTheme(storage())
+  const step = stepOf(route)
+  const [exploringExample, setExploringExample] = useState(initial.fresh)
+  const [newWeek, setNewWeek] = useState(false)
   const [pending, setPending] = useState<PendingReplace | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const [saveFailed, setSaveFailed] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const solver = useSolver()
 
-  const update: ProjectUpdate = useCallback((recipe) => setProject((p) => recipe(p)), [])
   const problems = useMemo(() => projectProblems(project), [project])
+  const freshResults = solver.result !== null && solveKey(solver.result.project) === solveKey(project)
+  const states = stepStates(project, freshResults, problems)
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSaveFailed(!saveProject(storage(), project)), 300)
     return () => window.clearTimeout(timer)
   }, [project])
 
+  const { undo, redo } = history
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || isTextEntry(event.target)) return
+      const key = event.key.toLowerCase()
+      if (key !== 'z' && key !== 'y') return
+      event.preventDefault()
+      if (key === 'y' || event.shiftKey) redo()
+      else undo()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [undo, redo])
+
+  const goTo = useCallback((next: StepId) => navigate(stepRoute(next)), [navigate])
+
+  // The new-week prompt belongs to the first page of the new week only.
+  useEffect(() => {
+    if (route.page !== 'employees') setNewWeek(false)
+  }, [route.page])
+
   const confirmReplace = () => {
     if (!pending) return
-    setProject(pending.make())
+    const next = pending.make()
+    history.replace(next)
     setPending(null)
     setFileError(null)
-    setTab('setup')
+    setExploringExample(false)
+    setNewWeek(false)
+    navigate({ page: 'employees' })
   }
 
-  const exportScenario = () => {
-    const json = JSON.stringify(serializeScenario(projectToScenario(project)), null, 2)
-    const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${project.name.trim().replace(/[^\w-]+/g, '-').toLowerCase() || 'schedule'}.json`
-    link.click()
-    URL.revokeObjectURL(url)
-  }
+  const saveBackup = () =>
+    downloadFile(`${slug(project.name)}-backup-${todayIso()}.json`, JSON.stringify(project, null, 2), 'application/json')
+
+  const exportScenario = () =>
+    downloadFile(`${slug(project.name)}.json`, JSON.stringify(serializeScenario(projectToScenario(project)), null, 2), 'application/json')
 
   const importFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -101,12 +149,16 @@ export function App() {
     }
   }
 
-  const tabs: { id: Tab; label: string; icon: IconName; count?: number; problems?: number }[] = [
-    { id: 'setup', label: 'Setup', icon: 'calendar' },
-    { id: 'employees', label: 'Employees', icon: 'users', count: project.employees.length },
-    { id: 'scoring', label: 'Scoring', icon: 'sliders' },
-    { id: 'solve', label: 'Solve', icon: 'play', problems: problems.length || undefined },
-  ]
+  const adoptSchedule = (run: SolvedRun, index: number) => {
+    update((p) => saveWeekSchedule(p, run.project, run.schedules[index]))
+    goTo('schedule')
+  }
+
+  const startNextWeek = () => {
+    update((p) => setWeekStart(p, addDays(p.weekStart, 7)))
+    navigate({ page: 'employees' })
+    setNewWeek(true)
+  }
 
   return (
     <>
@@ -129,23 +181,52 @@ export function App() {
               }}
             />
             <span className="spacer" />
+            <div className="btn-group history-buttons">
+              <button type="button" className="btn btn--ghost btn--icon btn--sm" aria-label="Undo" title="Undo (Ctrl+Z)" disabled={!history.canUndo} onClick={undo}>
+                <Icon name="undo" />
+              </button>
+              <button type="button" className="btn btn--ghost btn--icon btn--sm" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled={!history.canRedo} onClick={redo}>
+                <Icon name="redo" />
+              </button>
+            </div>
             {saveFailed ? (
-              <span className="pill pill--warning" title="This browser isn't saving changes (storage is blocked). Export your project to keep it.">
-                <Icon name="alert" size={12} /> Not saving · export to keep
+              <span className="pill pill--warning" title="This browser isn't saving changes (storage is blocked). Save a backup file to keep your work.">
+                <Icon name="alert" size={12} /> Not saving · save a backup
               </span>
             ) : (
               <span className="save-status save-status--ok" title="Changes are saved in this browser automatically">
                 <Icon name="check" size={12} /> Saved
               </span>
             )}
+            <button
+              type="button"
+              className="btn btn--ghost btn--icon btn--sm"
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              onClick={toggleTheme}
+            >
+              <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
+            </button>
+            <button
+              type="button"
+              className={`btn btn--ghost btn--icon btn--sm${route.page === 'settings' ? ' is-active' : ''}`}
+              aria-label="Settings"
+              title="Settings: shift rules and priorities"
+              aria-current={route.page === 'settings' ? 'page' : undefined}
+              onClick={() => navigate({ page: 'settings', tab: 'shifts' })}
+            >
+              <Icon name="settings" />
+            </button>
             <Menu
               label="Project"
               trigger={<>Project <Icon name="chevronDown" size={14} /></>}
               triggerClassName="btn btn--sm"
               entries={[
                 { label: 'New project', icon: 'filePlus', onSelect: () => setPending({ label: 'a blank project', make: () => projectFromScenario(parseScenario(BLANK)) }) },
-                { label: 'Import…', icon: 'upload', onSelect: () => fileInput.current?.click() },
-                { label: 'Export', icon: 'download', onSelect: exportScenario },
+                'separator',
+                { label: 'Save backup file', icon: 'download', onSelect: saveBackup },
+                { label: 'Open backup file…', icon: 'upload', onSelect: () => fileInput.current?.click() },
+                { label: 'Export for command line', icon: 'download', onSelect: exportScenario },
                 'separator',
                 { heading: 'Load an example' },
                 ...Object.values(EXAMPLES).map((example) => ({
@@ -158,37 +239,58 @@ export function App() {
             <input ref={fileInput} type="file" accept="application/json,.json" hidden onChange={importFile} />
           </div>
 
-          <nav className="tabs" role="tablist" aria-label="Sections">
-            {tabs.map((t) => (
-              <button key={t.id} type="button" role="tab" className="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>
-                <Icon name={t.icon} size={15} />
-                {t.label}
-                {t.count !== undefined && <span className="pill">{t.count}</span>}
-                {t.problems && <span className="pill pill--critical" aria-label={`${t.problems} problems`}>{t.problems}</span>}
-              </button>
-            ))}
-          </nav>
+          <div className="topbar-steps">
+            <Stepper current={step} states={states} onSelect={goTo} />
+            <WeekSwitcher project={project} update={update} />
+          </div>
         </div>
       </header>
 
       <div className="page">
+        {exploringExample && route.page === 'employees' && (
+          <Callout
+            tone="good"
+            title="You're exploring an example café"
+            actions={
+              <>
+                <button type="button" className="btn btn--sm btn--primary" onClick={() => setPending({ label: 'a blank project', make: () => projectFromScenario(parseScenario(BLANK)) })}>
+                  Start my own
+                </button>
+                <button type="button" className="btn btn--sm" onClick={() => setExploringExample(false)}>Keep exploring</button>
+              </>
+            }
+          >
+            <p className="hint">
+              Walk through the four steps above to see how it works. Everything saves in this browser as you go.
+            </p>
+          </Callout>
+        )}
         {fileError && (
           <Callout
             tone="critical"
             role="alert"
-            title="Import failed"
+            title="Couldn't open that file"
             actions={<button type="button" className="btn btn--sm" onClick={() => setFileError(null)}>Dismiss</button>}
           >
             <p className="hint">{fileError}</p>
           </Callout>
         )}
 
-        <main role="tabpanel">
-          {tab === 'setup' && <SetupPanel project={project} update={update} />}
-          {tab === 'employees' && <EmployeesPanel project={project} update={update} />}
-          {tab === 'scoring' && <ScoringPanel project={project} update={update} />}
-          {tab === 'solve' && <SolvePanel project={project} update={update} solver={solver} problems={problems} />}
+        <main>
+          {route.page === 'employees' && (
+            <EmployeesPage project={project} update={update} navigate={navigate} newWeek={newWeek} onDismissNewWeek={() => setNewWeek(false)} />
+          )}
+          {route.page === 'employee' && <EmployeePage project={project} update={update} navigate={navigate} id={route.id} tab={route.tab} />}
+          {route.page === 'coverage' && <CoveragePage project={project} update={update} />}
+          {route.page === 'generate' && (
+            <SolvePanel project={project} update={update} solver={solver} problems={problems} navigate={navigate} onUseSchedule={adoptSchedule} />
+          )}
+          {route.page === 'schedule' && <SchedulePanel project={project} update={update} navigate={navigate} onStartNextWeek={startNextWeek} />}
+          {route.page === 'settings' && <SettingsPage project={project} update={update} navigate={navigate} tab={route.tab} />}
         </main>
+
+        {/* Back/Next walk the steps; a person's page and Settings are side trips with their own way back. */}
+        {step && route.page !== 'employee' && <StepFooter current={step} onSelect={goTo} />}
       </div>
 
       <ConfirmDialog
@@ -199,7 +301,7 @@ export function App() {
         onCancel={() => setPending(null)}
       >
         <p className="hint">
-          This loads {pending?.label}. Your current project isn't kept anywhere else, so export it first if you want a copy.
+          This loads {pending?.label}. You can undo this, but to keep a copy for good, save a backup file first.
         </p>
       </ConfirmDialog>
     </>

@@ -25,6 +25,7 @@ import {
   slotIndex,
   type Employee,
   type OperatingWindow,
+  type Schedule,
   type ScheduleConfig,
 } from '../core/types'
 
@@ -49,6 +50,42 @@ export interface Project {
   rules: RuleSetting[]
   threshold: number
   search: SearchSettings
+  /** The schedule chosen for each week, at most one per week, oldest first. */
+  saved: SavedSchedule[]
+  /**
+   * Who is left out of a week's schedule, keyed by that week's Monday. A week with no entry
+   * inherits the closest earlier week's, so each week starts as the one before it ended; with no
+   * earlier entry at all, everyone works. Storing who is *out* means new hires start in.
+   */
+  excluded: Record<IsoDate, string[]>
+}
+
+/**
+ * A schedule someone chose to use for a week. Stored as dated shifts with names copied in, so
+ * history still reads correctly after the team changes.
+ */
+export interface SavedSchedule {
+  weekStart: IsoDate
+  /** ISO timestamp. */
+  savedAt: string
+  score: number
+  /** Everyone on the roster when it was saved, in roster order — including anyone with no shifts. */
+  team: SavedMember[]
+  shifts: SavedShift[]
+}
+
+export interface SavedMember {
+  employeeId: string
+  employeeName: string
+  targetWeeklyHours: number
+}
+
+export interface SavedShift {
+  employeeId: string
+  employeeName: string
+  date: IsoDate
+  startHour: number
+  endHour: number
 }
 
 /**
@@ -97,13 +134,19 @@ export interface SearchSettings {
   /** `null` means no node limit — JSON cannot store `Infinity`. */
   maxNodes: number | null
   tightenToBest: boolean
+  /**
+   * Off: keep the best `maxResults` schedules found, whatever they score — no threshold to pick.
+   * On: keep schedules scoring at least `threshold` (the original, exhaustive mode).
+   */
+  useThreshold: boolean
 }
 
 export const DEFAULT_SEARCH: SearchSettings = {
-  maxResults: 50,
-  timeLimitSeconds: 10,
+  maxResults: 10,
+  timeLimitSeconds: 15,
   maxNodes: null,
   tightenToBest: false,
+  useThreshold: false,
 }
 
 export function newId(): string {
@@ -145,13 +188,48 @@ export function projectFromScenario(scenario: Scenario, search = DEFAULT_SEARCH,
     rules: scenario.rules.map((r) => ({ ...r })),
     threshold: scenario.threshold,
     search: { ...search },
+    saved: [],
+    excluded: {},
   }
 }
 
-/** What the solver sees: the roster with this week's time off and pins applied. */
+/**
+ * What the solver sees: the people working this week, with this week's time off and pins applied.
+ * Its employee order is {@link workingEmployees}' order; results are indexed by it.
+ */
 export function projectToProblem(project: Project): { employees: Employee[]; config: ScheduleConfig } {
   const { employees, config } = projectRoster(project)
-  return { employees: resolveWeek(employees, project.weekStart, projectExceptions(project)), config }
+  const out = new Set(excludedFor(project, project.weekStart))
+  const working = employees.filter((e) => !out.has(e.id))
+  return { employees: resolveWeek(working, project.weekStart, projectExceptions(project)), config }
+}
+
+// ---------------------------------------------------------------------------
+// Who works which week.
+// ---------------------------------------------------------------------------
+
+/** Ids left out of `weekStart`: its own entry, else the closest earlier week's, else nobody. */
+export function excludedFor(project: Project, weekStart: IsoDate): string[] {
+  let best: IsoDate | null = null
+  for (const week of Object.keys(project.excluded)) {
+    if (week <= weekStart && (best === null || week > best)) best = week
+  }
+  return best === null ? [] : project.excluded[best]
+}
+
+/** The employees scheduled in the project's week, in roster order. */
+export function workingEmployees(project: Project): ProjectEmployee[] {
+  const out = new Set(excludedFor(project, project.weekStart))
+  return project.employees.filter((e) => !out.has(e.id))
+}
+
+/** Puts someone in or out of the project's week. Pins that week's list, so later edits elsewhere can't shift it. */
+export function setWorking(project: Project, employeeId: string, working: boolean): Project {
+  const ids = new Set(project.employees.map((e) => e.id))
+  const out = new Set(excludedFor(project, project.weekStart).filter((id) => ids.has(id)))
+  if (working) out.delete(employeeId)
+  else out.add(employeeId)
+  return { ...project, excluded: { ...project.excluded, [project.weekStart]: [...out] } }
 }
 
 function projectExceptions(project: Project): Record<string, EmployeeExceptions> {
@@ -194,6 +272,16 @@ export function projectToScenario(project: Project): Scenario {
     exceptions: projectExceptions(project),
     ...projectRoster(project),
   }
+}
+
+/**
+ * The parts of a project that change which schedules are valid or how they score. Results built
+ * from a project with a different key are out of date.
+ */
+export function solveKey(p: Project): string {
+  return JSON.stringify([
+    p.weekStart, excludedFor(p, p.weekStart), p.operatingHours, p.minCoverage, p.shiftRules, p.employees, p.rules, p.threshold, p.search.useThreshold,
+  ])
 }
 
 /** Every reason the solver would refuse this project, or an empty list. */
@@ -246,6 +334,40 @@ export function setOperatingWindow(project: Project, day: number, win: Operating
     if (!open) minCoverage[slotIndex(day, hour)] = 0
   }
   return { ...project, operatingHours, minCoverage }
+}
+
+/**
+ * Opening hours implied by a coverage grid: each day runs from its first hour needing anyone to
+ * its last. A day needing nobody is closed. (An hour needing 0 in the middle of a day stays open,
+ * just with no minimum: a day has one opening window.)
+ */
+export function windowsFromCoverage(minCoverage: readonly number[]): (OperatingWindow | null)[] {
+  return Array.from({ length: DAYS_PER_WEEK }, (_, day) => {
+    let startHour = -1
+    let endHour = -1
+    for (let hour = 0; hour < HOURS_PER_DAY; hour++) {
+      if (minCoverage[slotIndex(day, hour)] > 0) {
+        if (startHour < 0) startHour = hour
+        endHour = hour + 1
+      }
+    }
+    return startHour < 0 ? null : { startHour, endHour }
+  })
+}
+
+/** Paints staff needed onto `slots`; opening hours follow the coverage. */
+export function paintCoverage(project: Project, slots: Iterable<number>, value: number): Project {
+  const minCoverage = paintGrid(project.minCoverage, slots, value)
+  return { ...project, minCoverage, operatingHours: windowsFromCoverage(minCoverage) }
+}
+
+/** Copies one day's coverage onto other days. */
+export function copyDayCoverage(project: Project, from: number, to: readonly number[]): Project {
+  const minCoverage = project.minCoverage.slice()
+  for (const day of to) {
+    for (let hour = 0; hour < HOURS_PER_DAY; hour++) minCoverage[slotIndex(day, hour)] = project.minCoverage[slotIndex(from, hour)]
+  }
+  return { ...project, minCoverage, operatingHours: windowsFromCoverage(minCoverage) }
 }
 
 /** Sets every listed cell of a 168-entry grid to `value`, returning a new grid. */
@@ -361,7 +483,11 @@ export function clearWeekPins(project: Project, employeeId: string): Project {
 
 /** Column headers for the project's week: `'Mon 21'`. */
 export function weekDayLabels(project: Project): string[] {
-  return DAY_NAMES.map((name, day) => `${name} ${Number(addDays(project.weekStart, day).slice(8))}`)
+  return dayLabelsFor(project.weekStart)
+}
+
+export function dayLabelsFor(weekStart: IsoDate): string[] {
+  return DAY_NAMES.map((name, day) => `${name} ${Number(addDays(weekStart, day).slice(8))}`)
 }
 
 /** 168-entry grids marking which hours this week's time off and pins cover for `employee`. */
@@ -387,6 +513,53 @@ export function entryTiming(project: Project, entry: TimeSpan | DatedHours): 'pa
       ? { startDate: entry.date, startHour: entry.startHour, endDate: entry.date, endHour: entry.endHour }
       : entry
   return spanTiming(project.weekStart, span)
+}
+
+// ---------------------------------------------------------------------------
+// Saved schedules.
+// ---------------------------------------------------------------------------
+
+export function savedScheduleFor(project: Project, weekStart: IsoDate): SavedSchedule | null {
+  return project.saved.find((s) => s.weekStart === weekStart) ?? null
+}
+
+/**
+ * Records `schedule` as the schedule for `solved.weekStart`, replacing any earlier choice for that
+ * week. `solved` must be the project the schedule was built from: blocks are indexed by its
+ * employee order, which later edits may have changed.
+ */
+export function saveWeekSchedule(project: Project, solved: Project, schedule: Schedule, now = new Date()): Project {
+  const shifts: SavedShift[] = []
+  const working = workingEmployees(solved)
+  working.forEach((employee, e) => {
+    for (const block of schedule.blocks[e] ?? []) {
+      shifts.push({
+        employeeId: employee.id,
+        employeeName: employee.name,
+        date: addDays(solved.weekStart, block.day),
+        startHour: block.startHour,
+        endHour: block.endHour,
+      })
+    }
+  })
+  shifts.sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour || a.employeeName.localeCompare(b.employeeName))
+  const team = working.map((e) => ({ employeeId: e.id, employeeName: e.name, targetWeeklyHours: e.targetWeeklyHours }))
+  const entry: SavedSchedule = { weekStart: solved.weekStart, savedAt: now.toISOString(), score: schedule.score, team, shifts }
+  const saved = [...project.saved.filter((s) => s.weekStart !== solved.weekStart), entry]
+  saved.sort((a, b) => a.weekStart.localeCompare(b.weekStart))
+  return { ...project, saved }
+}
+
+export function removeSavedSchedule(project: Project, weekStart: IsoDate): Project {
+  return { ...project, saved: project.saved.filter((s) => s.weekStart !== weekStart) }
+}
+
+/** One row per team member of a saved schedule, in roster order, with their shifts and total hours. */
+export function savedRows(saved: SavedSchedule): (SavedMember & { shifts: SavedShift[]; hours: number })[] {
+  return saved.team.map((member) => {
+    const shifts = saved.shifts.filter((s) => s.employeeId === member.employeeId)
+    return { ...member, shifts, hours: shifts.reduce((sum, s) => sum + s.endHour - s.startHour, 0) }
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -438,6 +611,55 @@ function normaliseTimeOff(raw: unknown): ProjectTimeOff[] | null {
   return out
 }
 
+const isSavedShift = (value: unknown): value is SavedShift => {
+  const v = value as Partial<SavedShift> | null
+  return (
+    typeof v === 'object' && v !== null && typeof v.employeeId === 'string' && typeof v.employeeName === 'string' &&
+    isDatedHours({ date: v.date, startHour: v.startHour, endHour: v.endHour })
+  )
+}
+
+const isSavedMember = (value: unknown): value is SavedMember => {
+  const v = value as Partial<SavedMember> | null
+  return typeof v === 'object' && v !== null && typeof v.employeeId === 'string' && typeof v.employeeName === 'string' && Number.isFinite(v.targetWeeklyHours)
+}
+
+/** Saved schedules from storage, or `null` if any is malformed. A missing list is an older save: empty. */
+function normaliseSaved(raw: unknown): SavedSchedule[] | null {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) return null
+  const out: SavedSchedule[] = []
+  for (const entry of raw) {
+    const s = entry as Partial<SavedSchedule> | null
+    if (typeof s !== 'object' || s === null) return null
+    if (!isIsoDate(s.weekStart) || mondayOf(s.weekStart) !== s.weekStart) return null
+    if (typeof s.savedAt !== 'string' || !Number.isFinite(s.score)) return null
+    if (!Array.isArray(s.shifts) || !s.shifts.every(isSavedShift)) return null
+    if (!Array.isArray(s.team) || !s.team.every(isSavedMember)) return null
+    out.push({
+      weekStart: s.weekStart,
+      savedAt: s.savedAt,
+      score: s.score!,
+      team: s.team.map(({ employeeId, employeeName, targetWeeklyHours }) => ({ employeeId, employeeName, targetWeeklyHours })),
+      shifts: s.shifts.map(({ employeeId, employeeName, date, startHour, endHour }) => ({ employeeId, employeeName, date, startHour, endHour })),
+    })
+  }
+  return out.sort((a, b) => a.weekStart.localeCompare(b.weekStart))
+}
+
+/** Who sat out which week, or `null` if malformed. A missing record is an older save: nobody. */
+function normaliseExcluded(raw: unknown): Record<IsoDate, string[]> | null {
+  if (raw === undefined) return {}
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const out: Record<IsoDate, string[]> = {}
+  for (const [week, ids] of Object.entries(raw)) {
+    if (!isIsoDate(week) || mondayOf(week) !== week) return null
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) return null
+    out[week] = [...ids]
+  }
+  return out
+}
+
 const isGrid = (value: unknown): value is number[] =>
   Array.isArray(value) && value.length === WEEK_HOURS && value.every((v) => Number.isInteger(v) && v >= 0)
 
@@ -462,17 +684,24 @@ export function normaliseProject(raw: unknown, today = todayIso()): Project | nu
     if (!timeOff || !pins) return null
     employees.push({ ...e, timeOff, pins })
   }
+  const saved = normaliseSaved(p.saved)
+  if (!saved) return null
+  const excluded = normaliseExcluded(p.excluded)
+  if (!excluded) return null
   return {
     version: 1,
     name: p.name,
     weekStart: p.weekStart ?? mondayOf(today),
-    operatingHours: p.operatingHours,
+    // Opening hours follow coverage now; older saves could hold hours that needed nobody.
+    operatingHours: windowsFromCoverage(p.minCoverage),
     minCoverage: p.minCoverage,
     shiftRules: { ...shiftRulesOf(DEFAULT_CONFIG), ...p.shiftRules },
     employees,
     rules: normaliseRuleSettings(p.rules),
     threshold: Number.isFinite(p.threshold) ? p.threshold! : 0,
     search: { ...DEFAULT_SEARCH, ...p.search },
+    saved,
+    excluded,
   }
 }
 

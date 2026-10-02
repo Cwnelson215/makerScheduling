@@ -22,17 +22,8 @@ interface EditorProps {
   update: ProjectUpdate
 }
 
-/** Time off, entered as a start and an end; and the pins painted on the grid, listed for removal. */
-export function ExceptionsEditor(props: EditorProps) {
-  return (
-    <div className="exceptions">
-      <TimeOffEditor {...props} />
-      <PinList {...props} />
-    </div>
-  )
-}
-
-function TimeOffEditor({ project, employee, update }: EditorProps) {
+/** Time off, entered as a start and an end, with the person's entries listed below. */
+export function TimeOffEditor({ project, employee, update }: EditorProps) {
   // New time off defaults to the scheduled week's Monday, and to that day's opening hours.
   const opening = (date: string) => {
     const day = isIsoDate(date) ? weekDayIndex(mondayOf(date), date) : null
@@ -61,11 +52,6 @@ function TimeOffEditor({ project, employee, update }: EditorProps) {
 
   return (
     <div className="stack-sm">
-      <div>
-        <h3 className="section-label">Time off</h3>
-        <p className="hint">Can run across several days. Overrides availability for that time only.</p>
-      </div>
-
       <div className="span-form">
         <span className="span-label">From</span>
         <input
@@ -119,13 +105,10 @@ function TimeOffEditor({ project, employee, update }: EditorProps) {
   )
 }
 
-function PinList({ project, employee, update }: EditorProps) {
+/** The pins painted on the grid, listed for removal. */
+export function PinList({ project, employee, update }: EditorProps) {
   return (
     <div className="stack-sm">
-      <div>
-        <h3 className="section-label">Pinned shifts</h3>
-        <p className="hint">Painted with the Pin brush. They'll work at least these hours.</p>
-      </div>
       {employee.pins.length === 0 ? (
         <p className="empty">No pinned shifts.</p>
       ) : (

@@ -28,11 +28,14 @@ export function handleRequest(request: SolveRequest, post: (response: SolveRespo
       return
     }
 
+    // Without a threshold, keep the best `maxResults` found: the same hard-optimising search
+    // `calibrate` runs, widened from one schedule to a handful of options.
+    const byThreshold = project.search.useThreshold
     const { schedules, report } = solve(employees, config, {
       ...budget,
-      threshold: project.threshold,
+      threshold: byThreshold ? project.threshold : -Infinity,
       maxResults: project.search.maxResults,
-      tightenToBest: project.search.tightenToBest,
+      tightenToBest: byThreshold ? project.search.tightenToBest : true,
     })
     post({ type: 'solved', runId, schedules, report })
   } catch (error) {

@@ -322,7 +322,7 @@ describe('worker handler', () => {
   it('answers a solve with exactly one terminal message matching a direct solve', () => {
     const project = projectFromScenario(loadFixtureScenario('small-cafe.json'))
     project.threshold = 70
-    project.search = { ...project.search, maxResults: 1000, timeLimitSeconds: 60 }
+    project.search = { ...project.search, maxResults: 1000, timeLimitSeconds: 60, useThreshold: true }
     const messages = run('solve', project)
 
     const terminal = messages.filter((m) => m.type !== 'progress')
@@ -340,7 +340,7 @@ describe('worker handler', () => {
   it('solves with this week\'s pins and time off applied', () => {
     const project = projectFromScenario(datedScenario())
     project.threshold = -Infinity
-    project.search = { ...project.search, maxResults: 10_000, timeLimitSeconds: 60 }
+    project.search = { ...project.search, maxResults: 10_000, timeLimitSeconds: 60, useThreshold: true }
     const [terminal] = run('solve', project).filter((m) => m.type !== 'progress')
     if (terminal.type !== 'solved') throw new Error(`expected a solve, got ${terminal.type}`)
     expect(terminal.report.complete).toBe(true)

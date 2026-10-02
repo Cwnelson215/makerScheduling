@@ -16,26 +16,50 @@ npm run solve -- src/fixtures/small-cafe.json   # the same solver from the comma
 
 ## Using the app
 
-1. **Setup** — the week you're scheduling, opening hours per day, shift-length limits, split
-   shifts, and the minimum headcount for each hour (pick a number, then drag across the grid).
-2. **Employees** — add people, set target and maximum weekly hours, and paint their usual week
-   as preferred, not preferred, or unavailable. The **Pin** and **Unpin** brushes paint shifts
-   they must work on the dates of the week shown; use the week arrows to pin another week. Below
-   the grid, add **time off** as a start and an end, which can run across several days (see
-   [Time off and pins](#time-off-and-pins)).
-3. **Scoring** — turn rules on or off and set how many points each one costs.
-4. **Solve** — **Find achievable score** measures the best score this roster can reach and
-   offers a threshold; **Build schedules** then searches, with live progress. Results show each
-   schedule's shifts, where its points went, and staffing by hour. The report says plainly
-   whether the search finished or stopped at the time limit.
+The app is four steps, shown across the top bar next to the **week switcher**. The week
+switcher picks the week everything applies to: who's working, time off and pins, the schedules
+generated, and the one saved. Each page has its own address (`#/employees`, `#/coverage`, …), so
+the browser's Back button and bookmarks work. **Back** / **Next** at the foot of each step move
+along, and a step gets a check mark once it's done for that week.
 
-Everything autosaves in the browser (`localStorage`). The **Project** menu in the top bar
-starts a new project, loads an example, and handles files: **Export** writes the same scenario
-format the CLI reads, and **Import** accepts either that or an exported project.
+1. **Employees** — tick who's working this week. A week starts with the same people as the week
+   before (everyone, the first time), and new hires start ticked. **New employee** adds someone;
+   **Open** goes to a person's own page, which has three tabs:
+   - **Details** — name, target and maximum weekly hours, working this week, duplicate, delete.
+   - **Usual availability** — paint their normal week as preferred, not preferred, or unavailable.
+   - **Time off & pins** — time off as a start and an end, which can run across several days;
+     and must-work hours for the week shown, painted with the Pin brush (see
+     [Time off and pins](#time-off-and-pins)).
+2. **Coverage** — how many people you need each hour, the same every week. Pick a number and drag
+   across the grid; **Closed** (0) marks hours nobody is needed. Opening hours follow from it: each
+   day opens at its first hour needing someone and closes after its last.
+3. **Generate** — one click finds the best few schedules (10 by default), with a **Search time**
+   of Quick, Normal or Thorough. Pick an option to see its shifts, where its points went, and
+   staffing by hour, then choose **Use this schedule**. Shifts show as a **Timeline** (hours
+   across the top, one bar per shift in that person's colour) or as a **Table** of people by day. Under **Advanced**, the original mode keeps
+   every schedule above a minimum score, with **Find achievable score** to pick that minimum.
+4. **Schedule** — the week's saved schedule, **Download CSV** (a week grid with one row per
+   person, or a shift list with one row per shift), and **Start next week**, which moves the week
+   on and goes back to Employees. Schedules saved for other weeks are listed below it.
+
+**Settings** (the gear in the top bar) holds what's set once and rarely touched: **Shift rules**
+(shift lengths, daily hours, split shifts) and **Priorities** (each thing to avoid at Off, Low,
+Normal or High, which are multiples of the rule's default weight; **Show exact weights** reveals
+the numbers).
+
+**The weekly routine** is therefore: Employees (who's in, anyone's time off) → Generate → Use this
+schedule → Download CSV → Start next week. Coverage only needs revisiting when your hours change.
+
+Everything autosaves in the browser (`localStorage`), including saved schedules. **Undo** and
+**Redo** sit in the top bar (Ctrl/Cmd+Z, Shift+Ctrl/Cmd+Z); a paint stroke undoes in one step.
+The sun/moon button beside the gear switches between light and dark; until it's used, the app
+follows the device. The **Project** menu starts a new project, loads an example, and handles
+files: **Save backup file** writes the whole project including saved schedules, **Open backup file** reads that or
+a scenario file, and **Export for command line** writes the scenario format the CLI reads.
 
 The solver runs in a Web Worker, so the page stays responsive during a long search. **Stop**
 terminates the worker, and whatever that run had found is discarded: a synchronous search can't
-be asked to stop politely. To end early and keep results, lower the time limit instead.
+be asked to stop politely. To end early and keep results, choose a shorter search time instead.
 
 ## Time off and pins
 
@@ -248,7 +272,7 @@ defaults to the start of `from`; without `toHour` it runs to the end of `to`:
 
 ## Verification
 
-`npm test` — 182 tests. Three carry the correctness argument:
+`npm test` — 210 tests. Three carry the correctness argument:
 
 **`tests/solver.exhaustive.test.ts` — brute force vs. branch-and-bound.** On a fixture sized so
 full enumeration is feasible, the answer is computed twice: once by naive exhaustion with no
@@ -289,9 +313,16 @@ src/core/search/solver.ts      branch-and-bound, budgets, calibration
 src/core/report.ts             top-K heap, search report, formatting
 src/core/io.ts                 scenario file parsing and serialization
 src/cli.ts                     dev harness
-src/app/project.ts             editor model: plain-data project, edits, persistence
+src/app/project.ts             editor model: plain-data project, edits, saved schedules, persistence
+src/app/steps.ts               the four steps and whether each is done for the week
+src/app/routes.ts              pages and their URL hashes
+src/app/priorities.ts          Off/Low/Normal/High ↔ rule weights
+src/app/theme.ts               light / dark mode, following the device until switched
+src/app/scheduleCsv.ts         CSV exports of a saved schedule
+src/app/useUndoable.ts         undo/redo history
 src/app/useSolver.ts           owns the solver worker (progress, cancel, results)
-src/app/components/            Setup, Employees, Scoring, Solve screens; week grid and picker; time off
+src/app/people.ts              initials, week notes, and each person's colour slot
+src/app/components/            one component per page; stepper, week switcher, grids, shift table and timeline
 src/worker/                    worker entry, message protocol, request handler
 ```
 
@@ -300,8 +331,8 @@ src/worker/                    worker entry, message protocol, request handler
 - **Roles and skills.** Coverage is a plain headcount per hour; anyone available counts.
 - **Constraint propagation** in the solver, which would let large rosters finish instead of
   hitting the time limit.
-- **Schedule export** (CSV, calendar, printable week). Export currently saves the project, not a
-  chosen schedule.
+- **Calendar and print export** of a saved schedule. CSV exists; `.ics` and a printable week
+  don't yet.
 - **Keyboard painting** of the week grids; availability and coverage are mouse and touch only.
 
 The `Rule` interface is shaped so bounded reward-style rules can be added later without

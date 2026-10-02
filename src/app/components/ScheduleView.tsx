@@ -1,8 +1,10 @@
 import { useMemo } from 'react'
-import { fmtHour, fmtHourRange } from '../../core/config'
+import { fmtHour } from '../../core/config'
 import { catalogEntry } from '../../core/rules/catalog'
 import { Availability, DAY_NAMES, WEEK_HOURS, slotIndex, type Schedule, type ShiftBlock } from '../../core/types'
-import { isOpen, projectToProblem, visibleHours, weekDayLabels, type Project } from '../project'
+import { isOpen, projectToProblem, visibleHours, weekDayLabels, workingEmployees, type Project } from '../project'
+import { colorSlots } from '../people'
+import { ScheduleShifts } from './ScheduleShifts'
 import { WeekGrid } from './WeekGrid'
 
 function touchesNotPreferred(block: ShiftBlock, availability: number[]): boolean {
@@ -29,6 +31,8 @@ export function ScheduleView({ schedule, project }: { schedule: Schedule; projec
   // Pins as the solver saw them: this project's week, resolved.
   const pinned = useMemo(() => projectToProblem(project).employees.map((e) => e.pinned), [project])
   const dayLabels = weekDayLabels(project)
+  const working = workingEmployees(project)
+  const slots = colorSlots(project, working.map((e) => e.id))
   const staffed = new Array<number>(WEEK_HOURS).fill(0)
   for (const blocks of schedule.blocks) {
     for (const block of blocks) {
@@ -45,62 +49,23 @@ export function ScheduleView({ schedule, project }: { schedule: Schedule; projec
 
   return (
     <div className="stack">
-      <div className="schedule-scroll">
-        <table className="schedule-table">
-          <thead>
-            <tr>
-              <th scope="col">Employee</th>
-              {dayLabels.map((d) => (
-                <th scope="col" key={d}>{d}</th>
-              ))}
-              <th scope="col" className="num">Hours</th>
-            </tr>
-          </thead>
-          <tbody>
-            {project.employees.map((employee, e) => {
-              const hours = schedule.hoursPerEmployee[e]
-              const delta = hours - employee.targetWeeklyHours
-              return (
-                <tr key={employee.id}>
-                  <th scope="row">{employee.name}</th>
-                  {DAY_NAMES.map((d, day) => (
-                    <td key={d}>
-                      {schedule.blocks[e]
-                        .filter((b) => b.day === day)
-                        .map((b) => {
-                          const flagged = touchesNotPreferred(b, employee.availability)
-                          const isPinned = touchesPinned(b, pinned[e])
-                          const notes = [
-                            isPinned && 'Covers a pinned shift',
-                            flagged && 'Includes hours this employee marked not preferred',
-                          ].filter(Boolean)
-                          return (
-                            <span
-                              key={b.startHour}
-                              className={`shift-chip${flagged ? ' has-not-preferred' : ''}${isPinned ? ' is-pinned' : ''}`}
-                              title={notes.length ? notes.join('. ') : undefined}
-                            >
-                              {fmtHourRange(b.startHour, b.endHour)}
-                              {isPinned && <span className="chip-note"> · pinned</span>}
-                            </span>
-                          )
-                        })}
-                    </td>
-                  ))}
-                  <td className="num">
-                    <div>{hours}h</div>
-                    <div className="hours-target">
-                      target {employee.targetWeeklyHours}
-                      {delta !== 0 && ` (${delta > 0 ? '+' : ''}${delta})`}
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-      <p className="hint">Dashed shifts include hours the employee marked not preferred. Pinned shifts were required by a pin.</p>
+      <ScheduleShifts
+        dayLabels={dayLabels}
+        hours={visibleHours(project)}
+        rows={working.map((employee, e) => ({
+          key: employee.id,
+          name: employee.name,
+          hours: schedule.hoursPerEmployee[e],
+          target: employee.targetWeeklyHours,
+          slot: slots[e],
+          blocks: schedule.blocks[e].map((b) => ({
+            ...b,
+            notPreferred: touchesNotPreferred(b, employee.availability),
+            pinned: touchesPinned(b, pinned[e]),
+          })),
+        }))}
+      />
+      <p className="hint">Dashed shifts include hours the employee marked not preferred. Heavy-outlined shifts were required by a pin.</p>
 
       <div className="stack-sm">
         <h4 className="section-label">Where the points went</h4>

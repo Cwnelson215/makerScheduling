@@ -1,27 +1,37 @@
+import { useState } from 'react'
 import { catalogEntry, type RuleSetting } from '../../core/rules/catalog'
+import { applyLevel, LEVELS, levelOf } from '../priorities'
 import type { Project, ProjectUpdate } from '../project'
 import { NumberField } from './NumberField'
 import { Card } from './ui/Card'
+import { Segmented } from './ui/Segmented'
 
 export function ScoringPanel({ project, update }: { project: Project; update: ProjectUpdate }) {
-  const setRule = (id: RuleSetting['id'], patch: Partial<RuleSetting>) =>
-    update((p) => ({ ...p, rules: p.rules.map((r) => (r.id === id ? { ...r, ...patch } : r)) }))
+  const [exact, setExact] = useState(false)
+  const setRule = (id: RuleSetting['id'], change: (setting: RuleSetting) => RuleSetting) =>
+    update((p) => ({ ...p, rules: p.rules.map((r) => (r.id === id ? change(r) : r)) }))
 
   return (
     <Card
-      title="Scoring rules"
-      description="Every schedule starts at 100. Each rule subtracts its weight per unit of penalty."
+      title="Priorities"
+      description="What matters most when choosing between schedules. Normal works well for most places."
       info={
         <>
           <p>
-            A higher weight means the solver avoids that thing harder. Weights can't go negative: rules only ever subtract,
-            which is what lets the solver drop weak branches early without losing good schedules.
+            Every schedule starts at 100 points and loses points for each thing below. <strong>High</strong> makes
+            the builder avoid that thing harder; <strong>Off</strong> ignores it.
           </p>
           <p>
-            Scores fall as rosters grow, since there are more hours to penalize. Use <strong>Find achievable score</strong> on
-            the Solve tab to pick a sensible threshold.
+            Bigger teams lose more points simply because there are more hours, so compare scores within a week rather
+            than against 100.
           </p>
         </>
+      }
+      actions={
+        <label className="toggle">
+          <input type="checkbox" role="switch" className="switch" checked={exact} onChange={(e) => setExact(e.target.checked)} />
+          <span className="toggle-label">Show exact weights</span>
+        </label>
       }
       flush
     >
@@ -29,28 +39,19 @@ export function ScoringPanel({ project, update }: { project: Project; update: Pr
         <table className="rules-table">
           <thead>
             <tr>
-              <th scope="col">On</th>
-              <th scope="col">Rule</th>
-              <th scope="col">Weight</th>
-              <th scope="col">Prunes</th>
+              <th scope="col">Avoid…</th>
+              <th scope="col">Priority</th>
+              {exact && <th scope="col">Weight</th>}
+              {exact && <th scope="col">Prunes</th>}
             </tr>
           </thead>
           <tbody>
             {project.rules.map((setting) => {
               const entry = catalogEntry(setting.id)
               const tight = entry.bound === 'tight'
+              const level = levelOf(setting)
               return (
                 <tr key={setting.id} className={setting.enabled ? '' : 'is-disabled'}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      className="switch"
-                      aria-label={`Use ${entry.label}`}
-                      checked={setting.enabled}
-                      onChange={(e) => setRule(setting.id, { enabled: e.target.checked })}
-                    />
-                  </td>
                   <td>
                     <div className="rule-name">{entry.label}</div>
                     <div className="rule-description">{entry.description}</div>
@@ -64,39 +65,52 @@ export function ScoringPanel({ project, update }: { project: Project; update: Pr
                           min={1}
                           max={24}
                           disabled={!setting.enabled}
-                          onChange={(v) => setRule(setting.id, { comfortableLength: v })}
+                          onChange={(v) => setRule(setting.id, (r) => ({ ...r, comfortableLength: v }))}
                         />
                         <span className="hint">hours</span>
                       </div>
                     )}
                   </td>
-                  <td>
-                    <div className="row" style={{ flexWrap: 'nowrap' }}>
-                      <NumberField
-                        label={`${entry.label} weight`}
-                        hideLabel
-                        value={setting.weight}
-                        min={0}
-                        step={0.5}
-                        integer={false}
-                        disabled={!setting.enabled}
-                        onChange={(v) => setRule(setting.id, { weight: v })}
-                      />
-                      <span className="hint" style={{ whiteSpace: 'nowrap' }}>{entry.unit}</span>
-                    </div>
+                  <td className="rule-level">
+                    <Segmented
+                      label={`${entry.label} priority`}
+                      options={LEVELS}
+                      value={level === 'custom' ? null : level}
+                      onChange={(next) => setRule(setting.id, (r) => applyLevel(r, next))}
+                    />
+                    {level === 'custom' && <span className="pill" title="Set with an exact weight">Custom</span>}
                   </td>
-                  <td>
-                    <span
-                      className={`pill${tight ? ' pill--good' : ''}`}
-                      title={
-                        tight
-                          ? 'Known as soon as a shift is assigned, so it cuts branches early.'
-                          : 'Only certain late in the search, so it cuts fewer branches.'
-                      }
-                    >
-                      {tight ? 'early' : 'late'}
-                    </span>
-                  </td>
+                  {exact && (
+                    <td>
+                      <div className="row" style={{ flexWrap: 'nowrap' }}>
+                        <NumberField
+                          label={`${entry.label} weight`}
+                          hideLabel
+                          value={setting.weight}
+                          min={0}
+                          step={0.5}
+                          integer={false}
+                          disabled={!setting.enabled}
+                          onChange={(v) => setRule(setting.id, (r) => ({ ...r, weight: v }))}
+                        />
+                        <span className="hint" style={{ whiteSpace: 'nowrap' }}>{entry.unit}</span>
+                      </div>
+                    </td>
+                  )}
+                  {exact && (
+                    <td>
+                      <span
+                        className={`pill${tight ? ' pill--good' : ''}`}
+                        title={
+                          tight
+                            ? 'Known as soon as a shift is assigned, so it cuts branches early.'
+                            : 'Only certain late in the search, so it cuts fewer branches.'
+                        }
+                      >
+                        {tight ? 'early' : 'late'}
+                      </span>
+                    </td>
+                  )}
                 </tr>
               )
             })}
